@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings
+from pydantic import Field
 from functools import lru_cache
 import os
 
@@ -8,10 +9,17 @@ class Settings(BaseSettings):
     environment: str = "development"
     
     # Database - PostgreSQL for production, SQLite for development
-    database_url: str = "sqlite:///./mnam.db"
+    # Railway uses DATABASE_URL (uppercase)
+    database_url: str = Field(
+        default="sqlite:///./mnam.db",
+        alias="DATABASE_URL"
+    )
     
     # Security
-    secret_key: str = "your-super-secret-key-change-this-in-production"
+    secret_key: str = Field(
+        default="your-super-secret-key-change-this-in-production",
+        alias="SECRET_KEY"
+    )
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
@@ -20,7 +28,10 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     
     # CORS - Frontend URL
-    frontend_url: str = "http://localhost:5173"
+    frontend_url: str = Field(
+        default="http://localhost:5173",
+        alias="FRONTEND_URL"
+    )
     
     @property
     def is_production(self) -> bool:
@@ -50,6 +61,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         extra = "ignore"
+        populate_by_name = True  # Allow both alias and field name
 
 
 @lru_cache()
