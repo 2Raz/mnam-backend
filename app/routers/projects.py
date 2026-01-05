@@ -49,7 +49,8 @@ async def get_all_projects(
     return result
 
 
-@router.get("/select", response_model=List[ProjectSimple])
+@router.get("/select")
+@router.get("/select/", response_model=List[ProjectSimple])
 async def get_projects_for_select(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)

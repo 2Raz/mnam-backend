@@ -19,7 +19,8 @@ from ..utils.security import (
 router = APIRouter(prefix="/api/auth", tags=["المصادقة"])
 
 
-@router.post("/login", response_model=Token)
+@router.post("/login")
+@router.post("/login/", response_model=Token)
 async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
@@ -56,7 +57,8 @@ async def login(
     )
 
 
-@router.post("/register", response_model=MessageResponse)
+@router.post("/register")
+@router.post("/register/", response_model=MessageResponse)
 async def register(
     user_data: RegisterRequest,
     db: Session = Depends(get_db)
@@ -97,7 +99,8 @@ async def register(
     )
 
 
-@router.post("/refresh", response_model=Token)
+@router.post("/refresh")
+@router.post("/refresh/", response_model=Token)
 async def refresh_token(
     request: RefreshTokenRequest,
     db: Session = Depends(get_db)
@@ -131,7 +134,8 @@ async def refresh_token(
     )
 
 
-@router.post("/logout", response_model=MessageResponse)
+@router.post("/logout")
+@router.post("/logout/", response_model=MessageResponse)
 async def logout():
     """تسجيل الخروج"""
     # In a stateless JWT setup, logout is handled client-side

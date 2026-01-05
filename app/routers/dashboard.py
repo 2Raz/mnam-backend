@@ -19,7 +19,9 @@ router = APIRouter(prefix="/api/dashboard", tags=["لوحة التحكم"])
 
 
 @router.get("")
-@router.get("/summary", response_model=DashboardSummary)
+@router.get("/")
+@router.get("/summary")
+@router.get("/summary/", response_model=DashboardSummary)
 async def get_dashboard_summary(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)

@@ -66,7 +66,8 @@ async def get_all_transactions(
     return result
 
 
-@router.get("/summary", response_model=FinancialSummary)
+@router.get("/summary")
+@router.get("/summary/", response_model=FinancialSummary)
 async def get_financial_summary(
     project_id: Optional[str] = None,
     start_date: Optional[date] = None,
@@ -99,7 +100,8 @@ async def get_financial_summary(
     )
 
 
-@router.get("/team-achievement", response_model=TeamAchievement)
+@router.get("/team-achievement")
+@router.get("/team-achievement/", response_model=TeamAchievement)
 async def get_team_achievement(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)

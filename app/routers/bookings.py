@@ -91,7 +91,8 @@ async def get_all_bookings(
     return result
 
 
-@router.get("/monthly", response_model=List[BookingResponse])
+@router.get("/monthly")
+@router.get("/monthly/", response_model=List[BookingResponse])
 async def get_monthly_bookings(
     year: int = Query(..., description="السنة"),
     month: int = Query(..., ge=1, le=12, description="الشهر (1-12)"),
@@ -139,6 +140,7 @@ async def get_monthly_bookings(
 
 
 @router.get("/check-availability")
+@router.get("/check-availability/")
 async def check_availability(
     unit_id: str,
     check_in_date: date,

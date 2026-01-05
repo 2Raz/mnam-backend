@@ -49,7 +49,8 @@ def get_gemini_model():
     return genai.GenerativeModel('gemini-1.5-flash')
 
 
-@router.post("/generate-description", response_model=GenerateDescriptionResponse)
+@router.post("/generate-description")
+@router.post("/generate-description/", response_model=GenerateDescriptionResponse)
 async def generate_unit_description(
     request: GenerateDescriptionRequest,
     current_user: User = Depends(get_current_user)
@@ -87,7 +88,8 @@ async def generate_unit_description(
         )
 
 
-@router.post("/chat", response_model=ChatResponse)
+@router.post("/chat")
+@router.post("/chat/", response_model=ChatResponse)
 async def ai_chat(
     request: ChatRequest,
     current_user: User = Depends(get_current_user)

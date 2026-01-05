@@ -50,7 +50,8 @@ async def get_all_units(
     return result
 
 
-@router.get("/by-project/{project_id}", response_model=List[UnitSimple])
+@router.get("/by-project/{project_id}")
+@router.get("/by-project/{project_id}/", response_model=List[UnitSimple])
 async def get_units_by_project(
     project_id: str,
     db: Session = Depends(get_db),
@@ -72,7 +73,8 @@ async def get_units_by_project(
     ]
 
 
-@router.get("/select/{project_id}", response_model=List[UnitForSelect])
+@router.get("/select/{project_id}")
+@router.get("/select/{project_id}/", response_model=List[UnitForSelect])
 async def get_units_for_select(
     project_id: str,
     db: Session = Depends(get_db),

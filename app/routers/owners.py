@@ -42,7 +42,8 @@ async def get_all_owners(
     return result
 
 
-@router.get("/select", response_model=List[OwnerSimple])
+@router.get("/select")
+@router.get("/select/", response_model=List[OwnerSimple])
 async def get_owners_for_select(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -79,7 +80,8 @@ async def get_owner(
     )
 
 
-@router.get("/{owner_id}/projects", response_model=List[OwnerProjectSummary])
+@router.get("/{owner_id}/projects")
+@router.get("/{owner_id}/projects/", response_model=List[OwnerProjectSummary])
 async def get_owner_projects(
     owner_id: str,
     db: Session = Depends(get_db),

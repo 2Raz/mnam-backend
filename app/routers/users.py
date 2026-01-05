@@ -23,6 +23,7 @@ async def get_all_users(
 
 
 @router.get("/roles/assignable")
+@router.get("/roles/assignable/")
 async def get_assignable_roles_endpoint(
     current_user: User = Depends(require_admin)
 ):
@@ -35,7 +36,8 @@ async def get_assignable_roles_endpoint(
     return roles
 
 
-@router.get("/me", response_model=UserResponse)
+@router.get("/me")
+@router.get("/me/", response_model=UserResponse)
 async def get_current_user_profile(
     current_user: User = Depends(get_current_user)
 ):
@@ -184,6 +186,7 @@ async def update_user(
 
 
 @router.patch("/{user_id}/toggle-active")
+@router.patch("/{user_id}/toggle-active/")
 async def toggle_user_active(
     user_id: str,
     db: Session = Depends(get_db),
