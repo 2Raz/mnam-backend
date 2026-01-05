@@ -1,11 +1,1 @@
-# Nixpacks configuration for Railway
-providers = ["python"]
-
-[phases.setup]
-nixPkgs = ["python311"]
-
-[phases.install]
-cmds = ["python -m pip install --upgrade pip", "python -m pip install -r requirements.txt"]
-
-[start]
-cmd = "python -m gunicorn app.main:app -w 2 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 120"
+# Empty - let Nixpacks auto-detect Python
