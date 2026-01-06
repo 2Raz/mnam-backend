@@ -101,9 +101,15 @@ def run_migrations():
         ("projects.created_by_id", "ALTER TABLE projects ADD COLUMN IF NOT EXISTS created_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
         ("projects.updated_by_id", "ALTER TABLE projects ADD COLUMN IF NOT EXISTS updated_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
         
-        # Units table
+        # Units table - tracking columns
         ("units.created_by_id", "ALTER TABLE units ADD COLUMN IF NOT EXISTS created_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
         ("units.updated_by_id", "ALTER TABLE units ADD COLUMN IF NOT EXISTS updated_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
+        # Units table - new feature columns
+        ("units.permit_no", "ALTER TABLE units ADD COLUMN IF NOT EXISTS permit_no VARCHAR(50)"),
+        ("units.description", "ALTER TABLE units ADD COLUMN IF NOT EXISTS description TEXT"),
+        ("units.amenities", "ALTER TABLE units ADD COLUMN IF NOT EXISTS amenities TEXT"),
+        ("units.floor_number", "ALTER TABLE units ADD COLUMN IF NOT EXISTS floor_number INTEGER DEFAULT 0"),
+        ("units.unit_area", "ALTER TABLE units ADD COLUMN IF NOT EXISTS unit_area FLOAT DEFAULT 0"),
         
         # Bookings table
         ("bookings.created_by_id", "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS created_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
