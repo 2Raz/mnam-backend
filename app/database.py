@@ -78,3 +78,60 @@ def get_db():
 def create_tables():
     """Create all tables in the database"""
     Base.metadata.create_all(bind=engine)
+
+
+def run_migrations():
+    """Run database migrations to add missing columns"""
+    from sqlalchemy import text
+    from sqlalchemy.exc import ProgrammingError
+    
+    print("🔄 Running database migrations...")
+    
+    # Only run migrations for PostgreSQL (production)
+    if not database_url.startswith("postgresql"):
+        print("   ⏭️  Skipping migrations (SQLite mode)")
+        return
+    
+    migrations = [
+        # Owners table
+        ("owners.created_by_id", "ALTER TABLE owners ADD COLUMN IF NOT EXISTS created_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
+        ("owners.updated_by_id", "ALTER TABLE owners ADD COLUMN IF NOT EXISTS updated_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
+        
+        # Projects table
+        ("projects.created_by_id", "ALTER TABLE projects ADD COLUMN IF NOT EXISTS created_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
+        ("projects.updated_by_id", "ALTER TABLE projects ADD COLUMN IF NOT EXISTS updated_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
+        
+        # Units table
+        ("units.created_by_id", "ALTER TABLE units ADD COLUMN IF NOT EXISTS created_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
+        ("units.updated_by_id", "ALTER TABLE units ADD COLUMN IF NOT EXISTS updated_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
+        
+        # Bookings table
+        ("bookings.created_by_id", "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS created_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
+        ("bookings.updated_by_id", "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS updated_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
+        ("bookings.customer_id", "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS customer_id VARCHAR(36) REFERENCES customers(id) ON DELETE SET NULL"),
+        
+        # Customers table
+        ("customers.booking_count", "ALTER TABLE customers ADD COLUMN IF NOT EXISTS booking_count INTEGER DEFAULT 0"),
+        ("customers.is_banned", "ALTER TABLE customers ADD COLUMN IF NOT EXISTS is_banned BOOLEAN DEFAULT FALSE"),
+        ("customers.ban_reason", "ALTER TABLE customers ADD COLUMN IF NOT EXISTS ban_reason TEXT"),
+        ("customers.gender", "ALTER TABLE customers ADD COLUMN IF NOT EXISTS gender VARCHAR(20)"),
+    ]
+    
+    with engine.connect() as conn:
+        for name, sql in migrations:
+            try:
+                conn.execute(text(sql))
+                conn.commit()
+                print(f"   ✅ {name}")
+            except ProgrammingError as e:
+                if "already exists" in str(e) or "duplicate" in str(e).lower():
+                    pass  # Column already exists
+                else:
+                    print(f"   ⚠️  {name}: {e}")
+                conn.rollback()
+            except Exception as e:
+                print(f"   ⚠️  {name}: {e}")
+                conn.rollback()
+    
+    print("✅ Migrations complete!")
+

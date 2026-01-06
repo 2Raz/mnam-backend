@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from .config import settings
-from .database import create_tables, get_db, SessionLocal
+from .database import create_tables, run_migrations, get_db, SessionLocal
 from .models.user import User, UserRole, SYSTEM_OWNER_DATA
 from .utils.security import hash_password
 
@@ -14,9 +14,9 @@ from .routers import auth, users, owners, projects, units, bookings, transaction
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan events"""
-    # Startup
     print("🚀 Starting mnam-backend...")
     create_tables()
+    run_migrations()
     
     db = SessionLocal()
     try:
