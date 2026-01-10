@@ -76,11 +76,14 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS Configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
-    allow_credentials=True,
+    allow_origins=[
+        "https://mnam.vercel.app",
+        "https://mnam-sys.vercel.app",
+        "http://localhost:5173",
+    ],
+    allow_credentials=False,   # True فقط لو Cookies
     allow_methods=["*"],
     allow_headers=["*"],
 )
