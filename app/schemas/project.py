@@ -12,7 +12,7 @@ class ContractStatus(str, Enum):
 
 
 class ProjectBase(BaseModel):
-    owner_id: str
+    owner_id: Optional[str]
     name: str
     city: Optional[str] = None
     district: Optional[str] = None
@@ -22,7 +22,7 @@ class ProjectBase(BaseModel):
     # حقول العقد
     contract_no: Optional[str] = None
     contract_status: ContractStatus = ContractStatus.ACTIVE
-    contract_duration: Optional[str] = None
+    contract_duration: Optional[int] = None
     commission_percent: Decimal = Decimal("0")
     bank_name: Optional[str] = None
     bank_iban: Optional[str] = None
