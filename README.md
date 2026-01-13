@@ -249,19 +249,21 @@ gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker
 
 ### Procfile
 ```
-web: gunicorn app.main:app -w 2 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT
+web: alembic upgrade head && gunicorn app.main:app -w 2 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 120
 ```
 
 ### railway.json
 ```json
 {
-  "$schema": "https://railway.app/railway.schema.json",
   "build": {
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "gunicorn app.main:app",
-    "restartPolicyType": "ON_FAILURE"
+    "startCommand": "alembic upgrade head && gunicorn app.main:app -w 2 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 120",
+    "healthcheckPath": "/health",
+    "healthcheckTimeout": 60,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
   }
 }
 ```
@@ -271,6 +273,81 @@ web: gunicorn app.main:app -w 2 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:
 2. `SECRET_KEY` - مفتاح سري قوي
 3. `ALGORITHM` - HS256
 4. `ACCESS_TOKEN_EXPIRE_MINUTES` - 1440
+5. `ENVIRONMENT` - production
+
+---
+
+## 🗄️ DB Migrations on Railway
+
+### كيف تعمل Migrations تلقائياً؟
+
+عند كل **Redeploy** على Railway:
+1. ينفذ `alembic upgrade head` أولاً
+2. تُطبق كل migrations الجديدة
+3. ثم يبدأ السيرفر
+
+### إضافة Migration جديد (محلياً)
+
+```bash
+# Windows
+migrate.bat new "add_new_column"
+
+# أو مباشرة
+alembic revision --autogenerate -m "add_new_column"
+```
+
+### أوامر مفيدة
+
+```bash
+# تطبيق كل migrations
+alembic upgrade head
+
+# التراجع migration واحد
+alembic downgrade -1
+
+# عرض الحالة الحالية
+alembic current
+
+# عرض التاريخ
+alembic history
+```
+
+### ⚠️ قواعد الأمان (مهم جداً!)
+
+عند إنشاء migration جديد:
+
+1. **الأعمدة الجديدة** يجب أن تكون:
+   - `nullable=True` (اختياري)
+   - أو `server_default='value'` (قيمة افتراضية)
+   
+   ```python
+   # ✅ صحيح
+   op.add_column('users', sa.Column('avatar', sa.String(), nullable=True))
+   op.add_column('users', sa.Column('points', sa.Integer(), server_default='0'))
+   
+   # ❌ خطأ - سيفشل إذا كانت هناك بيانات
+   op.add_column('users', sa.Column('required_field', sa.String(), nullable=False))
+   ```
+
+2. **حذف الأعمدة**: لا تحذف مباشرة، استخدم:
+   - أولاً: اجعله nullable
+   - ثم: بعد فترة، احذفه
+
+3. **تغيير نوع العمود**: استخدم migration تدريجي:
+   - أنشئ عمود جديد بالنوع الجديد
+   - انقل البيانات
+   - احذف القديم
+   - أعد تسمية الجديد
+
+### هيكل مجلد alembic
+```
+alembic/
+├── env.py           # إعدادات Environment
+├── script.py.mako   # قالب Migration
+└── versions/        # ملفات Migration
+    ├── 001_initial.py
+    └── ...
+```
 
 ---
 
