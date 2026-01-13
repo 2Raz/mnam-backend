@@ -24,11 +24,18 @@ class BookingBase(BaseModel):
     notes: Optional[str] = None
 
 
+class GuestGender(str, Enum):
+    """جنس الضيف (اختياري)"""
+    MALE = "male"
+    FEMALE = "female"
+
+
 class BookingCreate(BaseModel):
     project_id: str
     unit_id: str
     guest_name: str
     guest_phone: Optional[str] = None
+    guest_gender: Optional[GuestGender] = None  # جنس الضيف (اختياري) - Auto Customer Sync
     check_in_date: date
     check_out_date: date
     total_price: Decimal
@@ -39,6 +46,7 @@ class BookingCreate(BaseModel):
 class BookingUpdate(BaseModel):
     guest_name: Optional[str] = None
     guest_phone: Optional[str] = None
+    guest_gender: Optional[GuestGender] = None  # جنس الضيف (اختياري)
     check_in_date: Optional[date] = None
     check_out_date: Optional[date] = None
     total_price: Optional[Decimal] = None

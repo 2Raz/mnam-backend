@@ -1,122 +1,304 @@
-# mnam-backend
+<div align="center">
 
-نظام Backend لإدارة العقارات والحجوزات باستخدام FastAPI + SQLAlchemy
+# 🔌 MNAM Backend API | خادم مِنَام
 
-## 🚀 التشغيل المحلي
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?style=flat-square&logo=fastapi)](https://fastapi.tiangolo.com/)
+[![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-2.0+-red?style=flat-square)](https://www.sqlalchemy.org/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-13+-336791?style=flat-square&logo=postgresql)](https://www.postgresql.org/)
 
-### 1. إنشاء البيئة الافتراضية
-```bash
-python -m venv venv
-venv\Scripts\activate  # Windows
-# أو
-source venv/bin/activate  # Linux/Mac
-```
-
-### 2. تثبيت المتطلبات
-```bash
-pip install -r requirements.txt
-```
-
-### 3. تشغيل السيرفر
-```bash
-uvicorn app.main:app --reload
-```
-
-### 4. فتح التوثيق
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
+</div>
 
 ---
 
-## 🚂 النشر على Railway
+## 📖 نظرة عامة
 
-### الخطوة 1: إنشاء مشروع على Railway
-1. اذهب إلى [railway.app](https://railway.app)
-2. أنشئ مشروع جديد (New Project)
-3. اختر "Deploy from GitHub repo"
-4. اربط الـ repo الخاص بك
-
-### الخطوة 2: إضافة قاعدة بيانات PostgreSQL
-1. في مشروعك على Railway، اضغط "+ New"
-2. اختر "Database" → "PostgreSQL"
-3. Railway سيُنشئ `DATABASE_URL` تلقائياً
-
-### الخطوة 3: إضافة متغيرات البيئة
-في Settings → Variables، أضف:
-
-| Variable | القيمة | ملاحظة |
-|----------|--------|--------|
-| `SECRET_KEY` | `your-secret-key` | استخدم: `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
-| `ENVIRONMENT` | `production` | مهم! |
-| `FRONTEND_URL` | `https://your-frontend.vercel.app` | رابط الفرونت إند |
-| `DATABASE_URL` | (يُملأ تلقائياً) | من PostgreSQL |
-
-### الخطوة 4: النشر
-Railway سينشر التطبيق تلقائياً عند كل push.
-
-### التحقق من النشر
-- Health Check: `https://your-app.railway.app/health`
-- API Docs: `https://your-app.railway.app/docs`
+خادم REST API لنظام إدارة العقارات والحجوزات، مبني بـ FastAPI مع PostgreSQL.
 
 ---
 
-## 📁 هيكل المشروع
+## 🏗️ هيكل المشروع
+
 ```
 mnam-backend/
 ├── app/
-│   ├── main.py           # نقطة الدخول
-│   ├── config.py         # الإعدادات
-│   ├── database.py       # قاعدة البيانات
-│   ├── models/           # نماذج SQLAlchemy
-│   ├── schemas/          # Pydantic schemas
-│   ├── routers/          # API endpoints
-│   └── utils/            # أدوات مساعدة
-├── Procfile              # أمر التشغيل
-├── railway.json          # إعدادات Railway
-├── nixpacks.toml         # إعدادات البناء
-├── runtime.txt           # نسخة Python
-├── requirements.txt      # المتطلبات
-└── .env.example          # مثال متغيرات البيئة
+│   ├── __init__.py
+│   ├── main.py              # نقطة الدخول
+│   ├── config.py            # إعدادات التطبيق
+│   ├── database.py          # اتصال قاعدة البيانات
+│   │
+│   ├── models/              # نماذج SQLAlchemy
+│   │   ├── user.py          # المستخدمين والصلاحيات
+│   │   ├── owner.py         # الملاك
+│   │   ├── project.py       # المشاريع
+│   │   ├── unit.py          # الوحدات
+│   │   ├── booking.py       # الحجوزات
+│   │   ├── customer.py      # العملاء
+│   │   ├── transaction.py   # المعاملات المالية
+│   │   └── employee_performance.py  # أداء الموظفين
+│   │
+│   ├── routers/             # API Endpoints
+│   │   ├── auth.py          # المصادقة
+│   │   ├── users.py         # إدارة المستخدمين
+│   │   ├── owners.py        # إدارة الملاك
+│   │   ├── projects.py      # إدارة المشاريع
+│   │   ├── units.py         # إدارة الوحدات
+│   │   ├── bookings.py      # إدارة الحجوزات
+│   │   ├── customers.py     # إدارة العملاء
+│   │   ├── transactions.py  # المعاملات المالية
+│   │   ├── dashboard.py     # ملخص لوحة التحكم
+│   │   ├── ai.py            # المساعد الذكي
+│   │   └── employee_performance.py  # أداء الموظفين
+│   │
+│   ├── schemas/             # Pydantic Schemas
+│   ├── services/            # منطق الأعمال
+│   └── utils/               # أدوات مساعدة
+│       └── security.py      # تشفير وJWT
+│
+├── migrations/              # Alembic migrations
+├── requirements.txt         # المتطلبات
+├── Procfile                 # Railway deployment
+└── railway.json             # إعدادات Railway
 ```
 
-## 🔐 المصادقة
-- المستخدم الافتراضي: `admin` / `admin`
-- JWT tokens للمصادقة
-- Role-based access (system_owner/admin/owners_agent/customers_agent)
+---
 
-## 📝 API Endpoints
-- `/api/auth` - المصادقة
-- `/api/users` - المستخدمين
-- `/api/owners` - الملاك
-- `/api/projects` - المشاريع
-- `/api/units` - الوحدات
-- `/api/bookings` - الحجوزات
-- `/api/transactions` - المعاملات المالية
-- `/api/dashboard` - لوحة التحكم
-- `/api/ai` - الذكاء الاصطناعي
+## 📊 نماذج البيانات
 
-## 🔗 ملاحظة حول المسارات (Trailing Slash)
-جميع الـ endpoints تدعم الوصول **مع وبدون** trailing slash لمنع الـ 307 Redirects:
+### User (المستخدم)
+```python
+- id, username, email, hashed_password
+- first_name, last_name, phone
+- role: system_owner | admin | owners_agent | customers_agent
+- is_active, is_system_owner
 ```
-GET /api/owners   ✅
-GET /api/owners/  ✅
-POST /api/units   ✅
-POST /api/units/  ✅
+
+### Owner (المالك)
+```python
+- id, owner_name, owner_mobile_phone
+- paypal_email, note
+- projects (relationship)
 ```
-هذا يضمن عمل الـ API بشكل صحيح في بيئات الإنتاج حيث قد يتم حظر HTTP redirects.
 
-## 🐛 استكشاف الأخطاء
+### Project (المشروع)
+```python
+- id, owner_id, name
+- city, district, map_url
+- contract_no, contract_status, contract_duration
+- commission_percent, bank_name, bank_iban
+- units (relationship)
+```
 
-### "Application failed to start"
-- تأكد من وجود `DATABASE_URL` و `SECRET_KEY` في Variables
-- تحقق من Logs في Railway
+### Unit (الوحدة)
+```python
+- id, project_id, unit_name, unit_type
+- rooms, floor_number, unit_area
+- status: متاحة | محجوزة | صيانة | ...
+- price_days_of_week, price_in_weekends
+- amenities, description, permit_no
+```
 
-### "CORS error"
-- تأكد من أن `FRONTEND_URL` يحتوي على رابط الفرونت إند الصحيح
-- لا تضف `/` في نهاية الرابط
+### Booking (الحجز)
+```python
+- id, unit_id, customer_id
+- guest_name, guest_phone, guest_gender (optional)
+- check_in_date, check_out_date
+- total_price, status, notes
+```
 
-### "Database connection failed"
-- تأكد من ربط PostgreSQL بالتطبيق في Railway
-- تحقق من أن `DATABASE_URL` موجود في Variables
-# mnam-backend
-# mnam-backend
+### Customer (العميل)
+```python
+- id, name, phone (unique - normalized Saudi format)
+- email, gender
+- booking_count, completed_booking_count, total_revenue
+- is_banned, ban_reason
+- is_profile_complete  # False if created from booking
+```
+
+---
+
+## 🔄 Auto Customer Sync (مزامنة العملاء التلقائية)
+
+عند إنشاء أي حجز جديد، النظام يقوم تلقائياً بـ:
+
+### ✨ التنظيف (Sanitization)
+- **الاسم**: إزالة المسافات الزائدة والأحرف الغير مرغوبة
+- **الجوال**: توحيد الصيغة السعودية (05xxxxxxxx)
+  - Supports: `+966`, `966`, `00966`, `05`, `5`
+  - Removes: spaces, dashes, special chars
+
+### 🔀 Upsert Logic
+```
+إذا العميل موجود (بنفس الجوال):
+  ├── تحديث الحقول الناقصة فقط (gender, email)
+  ├── زيادة booking_count
+  └── إضافة المبلغ لـ total_revenue
+
+إذا العميل جديد:
+  ├── إنشاء تلقائي مع is_profile_complete = false
+  ├── booking_count = 1
+  └── total_revenue = مبلغ الحجز
+```
+
+### 📋 API Endpoints
+```
+GET  /api/customers/stats      - إحصائيات العملاء
+GET  /api/customers/incomplete - العملاء ناقصة البيانات
+GET  /api/customers/           - قائمة العملاء (الناقصين أولاً)
+```
+
+### 🎯 CustomersDashboard Features
+- Banner للملفات الناقصة (created from bookings)
+- العملاء الناقصين في أعلى الجدول
+- زر "إكمال البيانات"
+
+---
+
+## 🔐 نظام الصلاحيات
+
+```
+👑 system_owner (4) - كل الصلاحيات
+    │
+    └── 🔑 admin (3) - كل شي ما عدا System Owner
+            │
+            └── 👔 owners_agent (2) - الملاك، المشاريع، الوحدات
+                    │
+                    └── 👤 customers_agent (1) - الوحدات + الحجوزات
+```
+
+---
+
+## 🚀 التشغيل
+
+### متطلبات
+- Python 3.10+
+- PostgreSQL 13+
+
+### التثبيت
+```bash
+# إنشاء بيئة افتراضية
+python -m venv venv
+venv\Scripts\activate  # Windows
+source venv/bin/activate  # Linux/Mac
+
+# تثبيت المتطلبات
+pip install -r requirements.txt
+```
+
+### متغيرات البيئة (`.env`)
+```env
+DATABASE_URL=postgresql://user:password@localhost:5432/mnam_db
+SECRET_KEY=your-super-secret-key-here
+ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=1440
+```
+
+### تشغيل الخادم
+```bash
+# Development
+uvicorn app.main:app --reload --port 8000
+
+# Production
+gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker
+```
+
+---
+
+## 🌐 API Endpoints
+
+### 🔐 Auth
+| Method | Endpoint | الوصف |
+|--------|----------|-------|
+| POST | `/api/auth/login` | تسجيل الدخول |
+| GET | `/api/auth/me` | بيانات المستخدم الحالي |
+
+### 👥 Users
+| Method | Endpoint | الوصف |
+|--------|----------|-------|
+| GET | `/api/users/` | قائمة المستخدمين |
+| POST | `/api/users/` | إنشاء مستخدم |
+| PUT | `/api/users/{id}` | تعديل مستخدم |
+| DELETE | `/api/users/{id}` | حذف مستخدم |
+
+### 🏢 Owners
+| Method | Endpoint | الوصف |
+|--------|----------|-------|
+| GET | `/api/owners/` | قائمة الملاك |
+| POST | `/api/owners/` | إضافة مالك |
+| PUT | `/api/owners/{id}` | تعديل مالك |
+| DELETE | `/api/owners/{id}` | حذف مالك |
+
+### 🏠 Projects / Units / Bookings
+مماثل للـ endpoints أعلاه.
+
+### 📊 Dashboard
+| Method | Endpoint | الوصف |
+|--------|----------|-------|
+| GET | `/api/dashboard/summary` | ملخص لوحة التحكم |
+
+---
+
+## 📚 API Documentation
+
+بعد تشغيل الخادم، الوثائق التفاعلية متاحة على:
+- **Swagger UI**: http://localhost:8000/docs
+- **ReDoc**: http://localhost:8000/redoc
+
+---
+
+## 🚀 النشر على Railway
+
+### Procfile
+```
+web: gunicorn app.main:app -w 2 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT
+```
+
+### railway.json
+```json
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "NIXPACKS"
+  },
+  "deploy": {
+    "startCommand": "gunicorn app.main:app",
+    "restartPolicyType": "ON_FAILURE"
+  }
+}
+```
+
+### متغيرات البيئة على Railway
+1. `DATABASE_URL` - من PostgreSQL service
+2. `SECRET_KEY` - مفتاح سري قوي
+3. `ALGORITHM` - HS256
+4. `ACCESS_TOKEN_EXPIRE_MINUTES` - 1440
+
+---
+
+## 🧪 اختبار API
+
+```bash
+# Health check
+curl http://localhost:8000/health
+
+# Login
+curl -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=admin&password=admin"
+```
+
+---
+
+## 👤 المستخدمين الافتراضيين
+
+| Username | Password | Role |
+|----------|----------|------|
+| Head_Admin | H112as112! | system_owner |
+| admin | admin | admin |
+
+---
+
+<div align="center">
+
+**جزء من نظام مِنَام العقاري 🏠**
+
+</div>

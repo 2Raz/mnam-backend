@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, ForeignKey, DateTime, Numeric
+from sqlalchemy import Column, String, ForeignKey, DateTime, Numeric, Integer
 from sqlalchemy.orm import relationship
 from ..database import Base
 import enum
@@ -26,7 +26,7 @@ class Project(Base):
     # حقول العقد
     contract_no = Column(String(50), nullable=True)
     contract_status = Column(String(20), default=ContractStatus.ACTIVE.value)
-    contract_duration = Column(int, nullable=True)
+    contract_duration = Column(Integer, nullable=True)
     commission_percent = Column(Numeric(5, 2), default=0)
     bank_name = Column(String(100), nullable=True)
     bank_iban = Column(String(50), nullable=True)

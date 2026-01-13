@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, case, desc
 from typing import List, Optional
 
 from ..database import get_db
@@ -8,24 +8,100 @@ from ..models.customer import Customer
 from ..models.booking import Booking
 from ..schemas.customer import (
     CustomerResponse, CustomerCreate, CustomerUpdate, 
-    CustomerBanUpdate, CustomerWithBookings
+    CustomerBanUpdate, CustomerWithBookings, CustomerStatsResponse
 )
 from ..utils.dependencies import get_current_user
 from ..models.user import User
 from ..services.employee_performance_service import log_customer_created, EmployeePerformanceService
 from ..models.employee_performance import ActivityType
+from ..services.customer_service import (
+    normalize_phone, sanitize_name, get_customers_stats,
+    get_incomplete_profile_customers
+)
 
 router = APIRouter(prefix="/api/customers", tags=["العملاء"])
+
+
+@router.get("/stats")
+@router.get("/stats/", response_model=CustomerStatsResponse)
+async def get_customer_stats(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    إحصائيات العملاء:
+    - إجمالي العملاء
+    - العملاء الجدد (أقل من أسبوعين)
+    - العملاء المميزين (زيارتين+)
+    - البيانات المكتملة/الناقصة
+    """
+    from datetime import datetime, timedelta
+    
+    two_weeks_ago = datetime.utcnow() - timedelta(weeks=2)
+    
+    total = db.query(func.count(Customer.id)).scalar() or 0
+    new_customers = db.query(func.count(Customer.id)).filter(
+        Customer.created_at > two_weeks_ago
+    ).scalar() or 0
+    old_customers = total - new_customers
+    
+    vip_customers = db.query(func.count(Customer.id)).filter(
+        Customer.completed_booking_count >= 2
+    ).scalar() or 0
+    regular_customers = total - vip_customers
+    
+    complete_profiles = db.query(func.count(Customer.id)).filter(
+        Customer.is_profile_complete == True
+    ).scalar() or 0
+    incomplete_profiles = total - complete_profiles
+    
+    total_revenue = db.query(func.sum(Customer.total_revenue)).scalar() or 0.0
+    
+    return CustomerStatsResponse(
+        total_customers=total,
+        new_customers=new_customers,
+        old_customers=old_customers,
+        vip_customers=vip_customers,
+        regular_customers=regular_customers,
+        complete_profiles=complete_profiles,
+        incomplete_profiles=incomplete_profiles,
+        total_revenue=total_revenue
+    )
+
+
+@router.get("/incomplete")
+@router.get("/incomplete/", response_model=List[CustomerResponse])
+async def get_incomplete_customers(
+    limit: int = Query(50, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    جلب العملاء اللي بياناتهم ناقصة (تم إنشاؤهم من الحجوزات)
+    مفيد لعرض banner في لوحة التحكم
+    """
+    return get_incomplete_profile_customers(db, limit)
 
 
 @router.get("")
 @router.get("/", response_model=List[CustomerResponse])
 async def get_all_customers(
+    sort_incomplete_first: bool = Query(True, description="عرض العملاء الناقصة بياناتهم أولاً"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """الحصول على قائمة جميع العملاء"""
-    customers = db.query(Customer).order_by(Customer.created_at.desc()).all()
+    """
+    الحصول على قائمة جميع العملاء
+    - افتراضياً: العملاء الناقصة بياناتهم في الأعلى
+    """
+    if sort_incomplete_first:
+        # الناقصة أولاً، ثم حسب تاريخ الإنشاء
+        customers = db.query(Customer).order_by(
+            case((Customer.is_profile_complete == False, 0), else_=1),
+            desc(Customer.created_at)
+        ).all()
+    else:
+        customers = db.query(Customer).order_by(Customer.created_at.desc()).all()
     return customers
 
 

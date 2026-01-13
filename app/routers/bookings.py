@@ -22,6 +22,10 @@ from ..services.employee_performance_service import (
     log_customer_created
 )
 from ..models.employee_performance import ActivityType
+from ..services.customer_service import (
+    normalize_phone, sanitize_name, validate_customer_info,
+    upsert_customer_from_booking
+)
 
 router = APIRouter(prefix="/api/bookings", tags=["الحجوزات"])
 
@@ -214,8 +218,15 @@ async def create_booking(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """إنشاء حجز جديد"""
-    # Verify unit exists
+    """
+    إنشاء حجز جديد مع مزامنة تلقائية للعملاء (Auto Customer Sync)
+    
+    - يتم تنظيف وتوحيد رقم الجوال تلقائياً
+    - يتم تنظيف اسم العميل
+    - إذا العميل موجود: يتم تحديث بياناته الناقصة فقط
+    - إذا العميل جديد: يتم إنشاؤه تلقائياً
+    """
+    # ========== التحقق من الوحدة ==========
     unit = db.query(Unit).filter(Unit.id == booking_data.unit_id).first()
     if not unit:
         raise HTTPException(
@@ -223,48 +234,57 @@ async def create_booking(
             detail="الوحدة غير موجودة"
         )
     
-    # Check for date overlap
+    # ========== تنظيف بيانات العميل ==========
+    clean_name = sanitize_name(booking_data.guest_name)
+    normalized_phone = normalize_phone(booking_data.guest_phone or "")
+    
+    # ========== التحقق من صحة البيانات ==========
+    if not clean_name or len(clean_name) < 2:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="اسم الضيف مطلوب (حرفين على الأقل)"
+        )
+    
+    if not normalized_phone:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="رقم جوال الضيف مطلوب وغير صالح"
+        )
+    
+    # ========== التحقق من تداخل الحجوزات ==========
     if check_booking_overlap(db, booking_data.unit_id, booking_data.check_in_date, booking_data.check_out_date):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="يوجد تداخل مع حجز آخر في هذه الفترة"
         )
     
-    # البحث عن العميل أو إنشائه بناءً على رقم الجوال
-    customer = None
-    customer_id = None
-    if booking_data.guest_phone:
-        customer = db.query(Customer).filter(Customer.phone == booking_data.guest_phone).first()
-        
-        if customer:
-            # التحقق من حظر العميل
-            if customer.is_banned:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"العميل محظور. السبب: {customer.ban_reason or 'غير محدد'}"
-                )
-            # تحديث اسم العميل وزيادة عدد الحجوزات
-            customer.name = booking_data.guest_name
-            customer.booking_count += 1
-            customer_id = customer.id
-        else:
-            # إنشاء عميل جديد
-            customer = Customer(
-                name=booking_data.guest_name,
-                phone=booking_data.guest_phone,
-                booking_count=1
-            )
-            db.add(customer)
-            db.flush()  # للحصول على ID قبل الـ commit
-            customer_id = customer.id
+    # ========== Auto Customer Sync (Upsert) ==========
+    booking_amount = float(booking_data.total_price)
+    guest_gender = booking_data.guest_gender.value if booking_data.guest_gender else None
     
-    # تسجيل الموظف الذي أنشأ الحجز
+    customer, is_new_customer = upsert_customer_from_booking(
+        db=db,
+        name=clean_name,
+        phone=normalized_phone,
+        gender=guest_gender,
+        booking_amount=booking_amount,
+        is_new_booking=True
+    )
+    
+    # التحقق من حظر العميل
+    if customer.is_banned:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"العميل محظور. السبب: {customer.ban_reason or 'غير محدد'}"
+        )
+    
+    # ========== إنشاء الحجز ==========
     project = unit.project
     new_booking = Booking(
         unit_id=booking_data.unit_id,
-        customer_id=customer_id,
-        guest_name=booking_data.guest_name,
-        guest_phone=booking_data.guest_phone,
+        customer_id=customer.id,
+        guest_name=clean_name,  # الاسم المنظف
+        guest_phone=normalized_phone,  # الرقم الموحد
         check_in_date=booking_data.check_in_date,
         check_out_date=booking_data.check_out_date,
         total_price=booking_data.total_price,
@@ -277,12 +297,12 @@ async def create_booking(
     db.commit()
     db.refresh(new_booking)
     
-    # تسجيل نشاط إنشاء الحجز
-    log_booking_created(db, current_user.id, new_booking.id, float(booking_data.total_price))
+    # ========== تسجيل النشاطات ==========
+    log_booking_created(db, current_user.id, new_booking.id, booking_amount)
     
     # تسجيل نشاط إضافة عميل جديد إذا تم إنشاؤه
-    if customer and not db.query(Customer).filter(Customer.id == customer_id, Customer.booking_count > 1).first():
-        log_customer_created(db, current_user.id, customer_id)
+    if is_new_customer:
+        log_customer_created(db, current_user.id, customer.id)
     
     return BookingResponse(
         id=new_booking.id,
@@ -297,9 +317,9 @@ async def create_booking(
         project_id=project.id if project else "",
         project_name=project.name if project else "غير معروف",
         unit_name=unit.unit_name,
-        customer_id=customer_id,
-        customer_name=customer.name if customer else None,
-        customer_is_banned=customer.is_banned if customer else False,
+        customer_id=customer.id,
+        customer_name=customer.name,
+        customer_is_banned=customer.is_banned,
         created_at=new_booking.created_at,
         updated_at=new_booking.updated_at
     )

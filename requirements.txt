@@ -19,12 +19,11 @@ pydantic>=2.8.0
 pydantic-settings>=2.4.0
 email-validator>=2.2.0
 
+# Security
+slowapi>=0.1.9
+
 # AI Integration (optional)
 # google-generativeai>=0.7.0
 
 # Utilities
 python-dotenv>=1.0.0
-
-# CORS
-# Already included in FastAPI
-
