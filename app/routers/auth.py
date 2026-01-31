@@ -90,13 +90,17 @@ async def login(
     request_id = get_request_id(request)
     client_ip = get_client_ip(request)
     
-    # Find user by username
-    user = db.query(User).filter(User.username == form_data.username).first()
+    # Trim whitespace that mobile keyboards may add
+    username = form_data.username.strip()
+    password = form_data.password.strip() if form_data.password else ""
     
-    if not user or not verify_password(form_data.password, user.hashed_password):
+    # Find user by username
+    user = db.query(User).filter(User.username == username).first()
+    
+    if not user or not verify_password(password, user.hashed_password):
         log_auth_event(
             "LOGIN",
-            username=form_data.username,
+            username=username,
             success=False,
             details="Invalid credentials",
             ip_address=client_ip,
@@ -111,7 +115,7 @@ async def login(
     if not user.is_active:
         log_auth_event(
             "LOGIN",
-            username=form_data.username,
+            username=username,
             user_id=user.id,
             success=False,
             details="Account disabled",
