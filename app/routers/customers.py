@@ -18,6 +18,7 @@ from ..services.customer_service import (
     normalize_phone, sanitize_name, get_customers_stats,
     get_incomplete_profile_customers
 )
+from ..models.audit_log import AuditLog, ActivityType as AuditActivityType, EntityType as AuditEntityType
 
 router = APIRouter(prefix="/api/customers", tags=["العملاء"])
 
@@ -87,6 +88,7 @@ async def get_incomplete_customers(
 @router.get("/", response_model=List[CustomerResponse])
 async def get_all_customers(
     sort_incomplete_first: bool = Query(True, description="عرض العملاء الناقصة بياناتهم أولاً"),
+    include_deleted: bool = Query(False, description="تضمين المحذوفين"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -94,14 +96,19 @@ async def get_all_customers(
     الحصول على قائمة جميع العملاء
     - افتراضياً: العملاء الناقصة بياناتهم في الأعلى
     """
+    query = db.query(Customer)
+    
+    if not include_deleted:
+        query = query.filter(Customer.is_deleted == False)
+    
     if sort_incomplete_first:
         # الناقصة أولاً، ثم حسب تاريخ الإنشاء
-        customers = db.query(Customer).order_by(
+        customers = query.order_by(
             case((Customer.is_profile_complete == False, 0), else_=1),
             desc(Customer.created_at)
         ).all()
     else:
-        customers = db.query(Customer).order_by(Customer.created_at.desc()).all()
+        customers = query.order_by(Customer.created_at.desc()).all()
     return customers
 
 
@@ -142,18 +149,32 @@ async def create_customer(
 ):
     """إنشاء عميل جديد"""
     # التحقق من عدم وجود عميل بنفس رقم الجوال
-    existing = db.query(Customer).filter(Customer.phone == customer_data.phone).first()
+    normalized_phone = normalize_phone(customer_data.phone)
+    existing = db.query(Customer).filter(Customer.phone == normalized_phone).first()
     if existing:
         raise HTTPException(
             status_code=400, 
             detail="يوجد عميل مسجل بهذا الرقم مسبقاً"
         )
     
+    # تنظيف الاسم
+    clean_name = sanitize_name(customer_data.name)
+    if not clean_name or len(clean_name) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="اسم العميل مطلوب (حرفين على الأقل)"
+        )
+    
     customer = Customer(
-        name=customer_data.name,
-        phone=customer_data.phone,
+        name=clean_name,
+        phone=normalized_phone,
+        email=customer_data.email,
+        gender=customer_data.gender,
         notes=customer_data.notes
     )
+    
+    # حساب حالة اكتمال البيانات (name+phone فقط)
+    customer.update_profile_complete_status()
     
     db.add(customer)
     db.commit()
@@ -161,6 +182,22 @@ async def create_customer(
     
     # تسجيل نشاط إضافة عميل
     log_customer_created(db, current_user.id, customer.id)
+    
+    # تسجيل في سجل الأنشطة (AuditLog)
+    AuditLog.log(
+        db=db,
+        user=current_user,
+        activity_type=AuditActivityType.CREATE,
+        entity_type=AuditEntityType.CUSTOMER,
+        entity_id=customer.id,
+        entity_name=customer.name,
+        description=f"إضافة عميل جديد: {customer.name}",
+        new_values={
+            "name": customer.name,
+            "phone": customer.phone,
+            "email": customer.email
+        }
+    )
     
     return customer
 
@@ -191,6 +228,9 @@ async def update_customer(
     for field, value in update_data.items():
         setattr(customer, field, value)
     
+    # إعادة حساب حالة اكتمال البيانات بعد التحديث
+    customer.update_profile_complete_status()
+    
     db.commit()
     db.refresh(customer)
     
@@ -202,6 +242,18 @@ async def update_customer(
         entity_type="customer",
         entity_id=customer.id,
         description=f"تعديل بيانات عميل: {customer.name}"
+    )
+    
+    # تسجيل في سجل الأنشطة (AuditLog)
+    AuditLog.log(
+        db=db,
+        user=current_user,
+        activity_type=AuditActivityType.UPDATE,
+        entity_type=AuditEntityType.CUSTOMER,
+        entity_id=customer.id,
+        entity_name=customer.name,
+        description=f"تحديث بيانات عميل: {customer.name}",
+        new_values=update_data
     )
     
     return customer
@@ -237,6 +289,17 @@ async def ban_customer(
             entity_id=customer.id,
             description=f"حظر عميل: {customer.name}"
         )
+        # تسجيل في سجل الأنشطة
+        AuditLog.log(
+            db=db,
+            user=current_user,
+            activity_type=AuditActivityType.USER_BAN,
+            entity_type=AuditEntityType.CUSTOMER,
+            entity_id=customer.id,
+            entity_name=customer.name,
+            description=f"حظر عميل: {customer.name}",
+            new_values={"is_banned": True, "ban_reason": ban_data.ban_reason}
+        )
     elif not ban_data.is_banned and was_banned:
         service.log_activity(
             employee_id=current_user.id,
@@ -244,6 +307,17 @@ async def ban_customer(
             entity_type="customer",
             entity_id=customer.id,
             description=f"إلغاء حظر عميل: {customer.name}"
+        )
+        # تسجيل في سجل الأنشطة
+        AuditLog.log(
+            db=db,
+            user=current_user,
+            activity_type=AuditActivityType.USER_UNBAN,
+            entity_type=AuditEntityType.CUSTOMER,
+            entity_id=customer.id,
+            entity_name=customer.name,
+            description=f"إلغاء حظر عميل: {customer.name}",
+            new_values={"is_banned": False}
         )
     
     return customer
@@ -271,21 +345,101 @@ async def get_customer_bookings(
 
 
 @router.delete("/{customer_id}")
-@router.delete("/{customer_id}/", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{customer_id}/")
 async def delete_customer(
     customer_id: str,
+    permanent: bool = Query(False, description="حذف نهائي"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """حذف عميل"""
+    """
+    حذف عميل
+    - permanent=false (افتراضي): Soft Delete
+    - permanent=true: حذف نهائي (للمدير فقط)
+    """
+    from datetime import datetime
+    
     customer = db.query(Customer).filter(Customer.id == customer_id).first()
     if not customer:
         raise HTTPException(status_code=404, detail="العميل غير موجود")
     
-    db.delete(customer)
+    if permanent:
+        if current_user.role not in ['admin', 'system_owner']:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="الحذف النهائي متاح للمدير فقط"
+            )
+        # حفظ اسم العميل قبل الحذف
+        customer_name = customer.name
+        customer_id_temp = customer.id
+        
+        # تسجيل في سجل الأنشطة قبل الحذف
+        AuditLog.log(
+            db=db,
+            user=current_user,
+            activity_type=AuditActivityType.PERMANENT_DELETE,
+            entity_type=AuditEntityType.CUSTOMER,
+            entity_id=customer_id_temp,
+            entity_name=customer_name,
+            description=f"حذف نهائي لعميل: {customer_name}"
+        )
+        db.delete(customer)
+        db.commit()
+        return {"message": "تم حذف العميل نهائياً"}
+    else:
+        customer.is_deleted = True
+        customer.deleted_at = datetime.utcnow()
+        customer.deleted_by_id = current_user.id
+        db.commit()
+        
+        # تسجيل في سجل الأنشطة
+        AuditLog.log(
+            db=db,
+            user=current_user,
+            activity_type=AuditActivityType.DELETE,
+            entity_type=AuditEntityType.CUSTOMER,
+            entity_id=customer.id,
+            entity_name=customer.name,
+            description=f"حذف عميل: {customer.name}"
+        )
+        return {"message": "تم حذف العميل بنجاح"}
+
+
+@router.patch("/{customer_id}/restore")
+@router.patch("/{customer_id}/restore/")
+async def restore_customer(
+    customer_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """استعادة عميل محذوف"""
+    customer = db.query(Customer).filter(
+        Customer.id == customer_id, 
+        Customer.is_deleted == True
+    ).first()
+    if not customer:
+        raise HTTPException(
+            status_code=404, 
+            detail="العميل غير موجود أو غير محذوف"
+        )
+    
+    customer.is_deleted = False
+    customer.deleted_at = None
+    customer.deleted_by_id = None
     db.commit()
     
-    return None
+    # تسجيل في سجل الأنشطة
+    AuditLog.log(
+        db=db,
+        user=current_user,
+        activity_type=AuditActivityType.RESTORE,
+        entity_type=AuditEntityType.CUSTOMER,
+        entity_id=customer.id,
+        entity_name=customer.name,
+        description=f"استعادة عميل: {customer.name}"
+    )
+    
+    return {"message": "تم استعادة العميل بنجاح"}
 
 
 def get_or_create_customer(db: Session, name: str, phone: str) -> Customer:

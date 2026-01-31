@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Any
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
@@ -26,6 +26,14 @@ class UnitStatus(str, Enum):
     HIDDEN = "مخفية"
 
 
+class ChannelStatus(str, Enum):
+    """حالة ربط الوحدة بالقنوات الخارجية"""
+    MAPPED = "mapped"      # مربوط - active mapping exists
+    UNMAPPED = "unmapped"  # غير مربوط - no mapping
+    DISABLED = "disabled"  # معطل - mapping exists but is_active=False
+    ERROR = "error"        # خطأ - mapping has sync errors
+
+
 class UnitBase(BaseModel):
     project_id: str
     unit_name: str
@@ -39,10 +47,36 @@ class UnitBase(BaseModel):
     amenities: List[str] = []
     description: Optional[str] = None
     permit_no: Optional[str] = None
+    # معلومات الدخول للوحدة
+    access_info: Optional[str] = None
+    # روابط الحجز: [{"platform": "Airbnb", "url": "https://..."}]
+    booking_links: List[Any] = []
+
+
+class ExternalMappingInfo(BaseModel):
+    """معلومات ربط الوحدة بالقنوات الخارجية"""
+    id: str
+    provider: str = "channex"  # channex, beds24, etc.
+    channex_room_type_id: Optional[str] = None
+    channex_rate_plan_id: Optional[str] = None
+    is_active: bool = True
+    last_price_sync_at: Optional[datetime] = None
+    last_avail_sync_at: Optional[datetime] = None
+    
+    class Config:
+        from_attributes = True
 
 
 class UnitCreate(UnitBase):
-    pass
+    """Schema for creating a new unit with optional pricing policy fields"""
+    # Legacy pricing fields are inherited from UnitBase
+    
+    # 🆕 New Dynamic Pricing Fields (optional - for frontend)
+    base_weekday_price: Optional[Decimal] = None  # If provided, updates pricing policy
+    weekend_markup_percent: Optional[Decimal] = None
+    discount_16_percent: Optional[Decimal] = None
+    discount_21_percent: Optional[Decimal] = None
+    discount_23_percent: Optional[Decimal] = None
 
 
 class UnitUpdate(BaseModel):
@@ -58,6 +92,17 @@ class UnitUpdate(BaseModel):
     amenities: Optional[List[str]] = None
     description: Optional[str] = None
     permit_no: Optional[str] = None
+    # معلومات الدخول للوحدة
+    access_info: Optional[str] = None
+    # روابط الحجز
+    booking_links: Optional[List[Any]] = None
+    
+    # 🆕 New Dynamic Pricing Fields (optional)
+    base_weekday_price: Optional[Decimal] = None
+    weekend_markup_percent: Optional[Decimal] = None
+    discount_16_percent: Optional[Decimal] = None
+    discount_21_percent: Optional[Decimal] = None
+    discount_23_percent: Optional[Decimal] = None
 
 
 class UnitResponse(UnitBase):
@@ -67,6 +112,14 @@ class UnitResponse(UnitBase):
     city: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    
+    # 🆕 Pricing policy info (if available)
+    pricing_policy: Optional[dict] = None
+    
+    # 🆕 Channel Integration - External Mappings
+    external_mappings: List[ExternalMappingInfo] = []
+    has_channex_connection: bool = False  # عرض سريع لحالة الربط
+    channel_status: str = "unmapped"  # mapped, unmapped, disabled, error
     
     class Config:
         from_attributes = True

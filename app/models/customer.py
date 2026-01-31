@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timedelta
-from sqlalchemy import Column, String, Boolean, Integer, DateTime, Text, Float, Enum as SQLEnum
+from sqlalchemy import Column, String, Boolean, Integer, DateTime, Text, Float, Enum as SQLEnum, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.hybrid import hybrid_property
 import enum
@@ -42,6 +42,11 @@ class Customer(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
+    # Soft Delete
+    is_deleted = Column(Boolean, default=False, index=True)
+    deleted_at = Column(DateTime, nullable=True)
+    deleted_by_id = Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    
     # العلاقات
     bookings = relationship("Booking", back_populates="customer")
     
@@ -72,13 +77,12 @@ class Customer(Base):
     def check_profile_complete(self) -> bool:
         """
         التحقق من اكتمال بيانات العميل
-        البيانات المطلوبة: الاسم، الهاتف، البريد الإلكتروني، الجنس
+        البيانات المطلوبة: الاسم، الهاتف فقط
+        (email, gender, notes اختيارية ولا تؤثر على حالة الاكتمال)
         """
         return all([
-            self.name,
-            self.phone,
-            self.email,
-            self.gender
+            self.name and len(self.name.strip()) >= 2,
+            self.phone and len(self.phone.strip()) >= 9
         ])
     
     def update_profile_complete_status(self):

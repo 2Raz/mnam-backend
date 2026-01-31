@@ -367,3 +367,82 @@ async def delete_transaction(
     db.commit()
     
     return {"message": "تم حذف المعاملة بنجاح"}
+
+
+@router.get("/reports/export")
+@router.get("/reports/export/")
+async def export_financial_report(
+    period: str = Query("monthly", description="daily, weekly, monthly"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """تصدير تقرير مالي - يرجع بيانات JSON للتقرير"""
+    today = date.today()
+    
+    if period == "daily":
+        start_date = today
+        period_label = f"تقرير يومي - {today.strftime('%Y-%m-%d')}"
+    elif period == "weekly":
+        start_date = today - timedelta(days=today.weekday())
+        period_label = f"تقرير أسبوعي - من {start_date.strftime('%Y-%m-%d')} إلى {today.strftime('%Y-%m-%d')}"
+    else:  # monthly
+        start_date = date(today.year, today.month, 1)
+        period_label = f"تقرير شهري - {today.strftime('%Y-%m')}"
+    
+    total_units = db.query(Unit).count() or 1
+    
+    # الحجوزات
+    bookings = db.query(Booking).filter(
+        Booking.check_in_date >= start_date,
+        Booking.status.in_(["مؤكد", "دخول", "مكتمل"])
+    ).all()
+    
+    total_bookings = len(bookings)
+    total_revenue = sum(b.total_price or 0 for b in bookings)
+    
+    # الإلغاءات
+    cancellations = db.query(Booking).filter(
+        func.date(Booking.created_at) >= start_date,
+        Booking.status == "ملغي"
+    ).count()
+    
+    # نسبة الإشغال
+    days_count = (today - start_date).days + 1
+    occupancy_rate = round((total_bookings / (total_units * days_count)) * 100, 1) if days_count > 0 else 0
+    
+    # المعاملات المالية
+    transactions = db.query(Transaction).filter(
+        Transaction.date >= start_date
+    ).all()
+    
+    income = sum(t.amount for t in transactions if t.type == "دخل")
+    expenses = sum(t.amount for t in transactions if t.type == "صرف")
+    
+    return {
+        "report_title": period_label,
+        "generated_at": datetime.now().isoformat(),
+        "period": period,
+        "start_date": start_date.isoformat(),
+        "end_date": today.isoformat(),
+        "summary": {
+            "total_bookings": total_bookings,
+            "total_revenue": float(total_revenue),
+            "total_cancellations": cancellations,
+            "occupancy_rate": min(occupancy_rate, 100),
+            "transaction_income": float(income),
+            "transaction_expenses": float(expenses),
+            "net_profit": float(income - expenses)
+        },
+        "bookings": [
+            {
+                "id": b.id,
+                "guest_name": b.guest_name,
+                "check_in": b.check_in_date.isoformat() if b.check_in_date else None,
+                "check_out": b.check_out_date.isoformat() if b.check_out_date else None,
+                "total_price": float(b.total_price or 0),
+                "status": b.status
+            }
+            for b in bookings[:50]  # Limit to 50 for performance
+        ]
+    }
+

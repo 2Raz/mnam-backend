@@ -1,7 +1,8 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import Optional, List, TYPE_CHECKING, Any, Literal
 from datetime import datetime
 from enum import Enum
+import re
 
 
 class GenderEnum(str, Enum):
@@ -11,11 +12,23 @@ class GenderEnum(str, Enum):
 
 
 class CustomerBase(BaseModel):
-    name: str
-    phone: str
-    email: Optional[EmailStr] = None  # البريد الإلكتروني (اختياري)
-    gender: Optional[GenderEnum] = None  # الجنس (اختياري)
-    notes: Optional[str] = None
+    name: str = Field(..., min_length=1, max_length=200, description="اسم العميل")
+    phone: str = Field(..., min_length=5, max_length=20, description="رقم الهاتف")
+    email: Optional[EmailStr] = None
+    gender: Optional[GenderEnum] = None
+    notes: Optional[str] = Field(None, max_length=2000, description="ملاحظات")
+    
+    @field_validator('name', 'notes', mode='before')
+    @classmethod
+    def sanitize_text_fields(cls, v):
+        """XSS تعقيم الحقول النصية لمنع"""
+        if v is None:
+            return v
+        if isinstance(v, str):
+            # إزالة script tags و event handlers
+            v = re.sub(r'<script[^>]*>.*?</script>', '', v, flags=re.IGNORECASE | re.DOTALL)
+            v = re.sub(r'on\w+\s*=', '', v, flags=re.IGNORECASE)
+        return v
 
 
 class CustomerCreate(CustomerBase):
@@ -23,13 +36,23 @@ class CustomerCreate(CustomerBase):
 
 
 class CustomerUpdate(BaseModel):
-    name: Optional[str] = None
-    phone: Optional[str] = None
-    email: Optional[EmailStr] = None  # البريد الإلكتروني
-    gender: Optional[GenderEnum] = None  # الجنس
-    notes: Optional[str] = None
+    name: Optional[str] = Field(None, max_length=200)
+    phone: Optional[str] = Field(None, max_length=20)
+    email: Optional[EmailStr] = None
+    gender: Optional[GenderEnum] = None
+    notes: Optional[str] = Field(None, max_length=2000)
     is_banned: Optional[bool] = None
-    ban_reason: Optional[str] = None
+    ban_reason: Optional[str] = Field(None, max_length=500)
+    
+    @field_validator('name', 'notes', 'ban_reason', mode='before')
+    @classmethod
+    def sanitize_text_fields(cls, v):
+        if v is None:
+            return v
+        if isinstance(v, str):
+            v = re.sub(r'<script[^>]*>.*?</script>', '', v, flags=re.IGNORECASE | re.DOTALL)
+            v = re.sub(r'on\w+\s*=', '', v, flags=re.IGNORECASE)
+        return v
 
 
 class CustomerBanUpdate(BaseModel):

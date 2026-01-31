@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 
 from ..database import get_db
 from ..models.project import Project
@@ -11,6 +11,7 @@ from ..utils.dependencies import get_current_user, require_owners_agent
 from ..models.user import User
 from ..services.employee_performance_service import log_project_created, EmployeePerformanceService
 from ..models.employee_performance import ActivityType
+from ..models.audit_log import AuditLog, ActivityType as AuditActivityType, EntityType as AuditEntityType
 
 router = APIRouter(prefix="/api/projects", tags=["المشاريع"])
 
@@ -18,11 +19,17 @@ router = APIRouter(prefix="/api/projects", tags=["المشاريع"])
 @router.get("")
 @router.get("/", response_model=List[ProjectResponse])
 async def get_all_projects(
+    include_deleted: bool = Query(False, description="تضمين المحذوفين"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """الحصول على قائمة جميع المشاريع"""
-    projects = db.query(Project).order_by(Project.created_at.desc()).all()
+    query = db.query(Project)
+    
+    if not include_deleted:
+        query = query.filter(Project.is_deleted == False)
+    
+    projects = query.order_by(Project.created_at.desc()).all()
     
     result = []
     for project in projects:
@@ -138,6 +145,23 @@ async def create_project(
     # تسجيل نشاط إنشاء مشروع
     log_project_created(db, current_user.id, new_project.id)
     
+    # تسجيل في سجل الأنشطة (AuditLog)
+    AuditLog.log(
+        db=db,
+        user=current_user,
+        activity_type=AuditActivityType.CREATE,
+        entity_type=AuditEntityType.PROJECT,
+        entity_id=new_project.id,
+        entity_name=new_project.name,
+        description=f"إنشاء مشروع جديد: {new_project.name}",
+        new_values={
+            "name": new_project.name,
+            "city": new_project.city,
+            "district": new_project.district,
+            "owner_name": owner.owner_name
+        }
+    )
+    
     return ProjectResponse(
         id=new_project.id,
         owner_id=new_project.owner_id,
@@ -197,6 +221,18 @@ async def update_project(
         description=f"تعديل مشروع: {project.name}"
     )
     
+    # تسجيل في سجل الأنشطة (AuditLog)
+    AuditLog.log(
+        db=db,
+        user=current_user,
+        activity_type=AuditActivityType.UPDATE,
+        entity_type=AuditEntityType.PROJECT,
+        entity_id=project.id,
+        entity_name=project.name,
+        description=f"تحديث بيانات مشروع: {project.name}",
+        new_values=update_data
+    )
+    
     return ProjectResponse(
         id=project.id,
         owner_id=project.owner_id,
@@ -223,10 +259,17 @@ async def update_project(
 @router.delete("/{project_id}/")
 async def delete_project(
     project_id: str,
+    permanent: bool = Query(False, description="حذف نهائي"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_owners_agent)
 ):
-    """حذف مشروع (للمدير فقط)"""
+    """
+    حذف مشروع
+    - permanent=false (افتراضي): Soft Delete
+    - permanent=true: حذف نهائي (للمدير فقط)
+    """
+    from datetime import datetime
+    
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(
@@ -234,7 +277,76 @@ async def delete_project(
             detail="المشروع غير موجود"
         )
     
-    db.delete(project)
+    if permanent:
+        if current_user.role not in ['admin', 'system_owner']:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="الحذف النهائي متاح للمدير فقط"
+            )
+        # تسجيل في سجل الأنشطة قبل الحذف
+        AuditLog.log(
+            db=db,
+            user=current_user,
+            activity_type=AuditActivityType.PERMANENT_DELETE,
+            entity_type=AuditEntityType.PROJECT,
+            entity_id=project.id,
+            entity_name=project.name,
+            description=f"حذف نهائي لمشروع: {project.name}"
+        )
+        db.delete(project)
+        db.commit()
+        return {"message": "تم حذف المشروع نهائياً"}
+    else:
+        project.is_deleted = True
+        project.deleted_at = datetime.utcnow()
+        project.deleted_by_id = current_user.id
+        db.commit()
+        
+        # تسجيل في سجل الأنشطة
+        AuditLog.log(
+            db=db,
+            user=current_user,
+            activity_type=AuditActivityType.DELETE,
+            entity_type=AuditEntityType.PROJECT,
+            entity_id=project.id,
+            entity_name=project.name,
+            description=f"حذف مشروع: {project.name}"
+        )
+        return {"message": "تم حذف المشروع بنجاح"}
+
+
+@router.patch("/{project_id}/restore")
+@router.patch("/{project_id}/restore/")
+async def restore_project(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_owners_agent)
+):
+    """استعادة مشروع محذوف"""
+    project = db.query(Project).filter(
+        Project.id == project_id, 
+        Project.is_deleted == True
+    ).first()
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="المشروع غير موجود أو غير محذوف"
+        )
+    
+    project.is_deleted = False
+    project.deleted_at = None
+    project.deleted_by_id = None
     db.commit()
     
-    return {"message": "تم حذف المشروع بنجاح"}
+    # تسجيل في سجل الأنشطة
+    AuditLog.log(
+        db=db,
+        user=current_user,
+        activity_type=AuditActivityType.RESTORE,
+        entity_type=AuditEntityType.PROJECT,
+        entity_id=project.id,
+        entity_name=project.name,
+        description=f"استعادة مشروع: {project.name}"
+    )
+    
+    return {"message": "تم استعادة المشروع بنجاح"}

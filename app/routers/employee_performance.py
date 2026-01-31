@@ -292,3 +292,61 @@ async def get_quick_stats(
         "this_week": service.get_activity_count(current_user.id, week_start, today),
         "this_month": service.get_activity_count(current_user.id, month_start, today)
     }
+
+
+# ======== تتبع الجلسات والحضور ========
+
+from ..services.session_tracking_service import SessionTrackingService
+
+
+@router.post("/heartbeat")
+@router.post("/heartbeat/")
+async def heartbeat(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """نبضة الحياة - تحديث حالة الاتصال"""
+    service = SessionTrackingService(db)
+    return service.heartbeat(current_user.id)
+
+
+@router.get("/my-session")
+@router.get("/my-session/")
+async def get_my_session(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """إحصائيات جلستي اليوم"""
+    service = SessionTrackingService(db)
+    return service.get_my_session_stats(current_user.id)
+
+
+@router.get("/employees-status")
+@router.get("/employees-status/")
+async def get_employees_status(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """حالة اتصال جميع الموظفين (للمدير)"""
+    if not current_user.is_admin_or_higher:
+        raise HTTPException(status_code=403, detail="صلاحيات غير كافية")
+    
+    service = SessionTrackingService(db)
+    return service.get_all_employees_status()
+
+
+@router.get("/attendance-report")
+@router.get("/attendance-report/")
+async def get_attendance_report(
+    period: str = Query("weekly", description="weekly or monthly"),
+    employee_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """تقرير الحضور الأسبوعي/الشهري"""
+    if not current_user.is_admin_or_higher:
+        raise HTTPException(status_code=403, detail="صلاحيات غير كافية")
+    
+    service = SessionTrackingService(db)
+    return service.get_attendance_report(period, employee_id)
+

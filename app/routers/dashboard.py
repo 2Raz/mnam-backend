@@ -181,19 +181,33 @@ async def get_dashboard_summary(
     
     if current_target:
         daily_target = current_target.target_bookings or 0
-        # الهدف الأسبوعي = الهدف اليومي × 7
-        weekly_target = daily_target * 7
+        # الهدف الأسبوعي = الهدف اليومي × 5 (أيام العمل)
+        weekly_target = daily_target * 5
+    else:
+        # استخدام أهداف افتراضية بناءً على دور المستخدم
+        if current_user.role == "customers_agent":
+            daily_target = 3  # 3 حجوزات يومياً كهدف افتراضي
+            weekly_target = 15  # 15 حجز أسبوعياً
+        elif current_user.role == "owners_agent":
+            daily_target = 2  # 2 عمليات يومياً
+            weekly_target = 10
+        elif current_user.role in ["admin", "system_owner"]:
+            daily_target = 5  # 5 عمليات يومياً للمدير
+            weekly_target = 25
+        else:
+            daily_target = 2  # افتراضي عام
+            weekly_target = 10
     
     # حساب نسبة الإنجاز بناء على الهدف
     if daily_target > 0:
-        daily_rate = round((daily_completed / daily_target * 100), 1)
+        daily_rate = min(round((daily_completed / daily_target * 100), 1), 100)
     else:
-        daily_rate = round((daily_completed / daily_bookings * 100) if daily_bookings > 0 else 0, 1)
+        daily_rate = 0
     
     if weekly_target > 0:
-        weekly_rate = round((weekly_completed / weekly_target * 100), 1)
+        weekly_rate = min(round((weekly_completed / weekly_target * 100), 1), 100)
     else:
-        weekly_rate = round((weekly_completed / weekly_bookings * 100) if weekly_bookings > 0 else 0, 1)
+        weekly_rate = 0
     
     employee_performance = EmployeePerformance(
         daily_bookings=daily_bookings,

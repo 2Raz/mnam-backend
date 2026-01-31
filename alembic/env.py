@@ -24,7 +24,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.database import Base
 from app.models import (
     User, Owner, Project, Unit, Booking, Transaction, Customer,
-    RefreshToken, EmployeeActivityLog, EmployeeTarget, EmployeePerformanceSummary
+    RefreshToken, EmployeeActivityLog, EmployeeTarget, EmployeePerformanceSummary,
+    PricingPolicy, ChannelConnection, ExternalMapping, IntegrationOutbox,
+    IntegrationLog, InboundIdempotency, EmployeeTask
 )
 
 # this is the Alembic Config object

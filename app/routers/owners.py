@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 
 from ..database import get_db
 from ..models.owner import Owner
@@ -12,6 +12,7 @@ from ..utils.dependencies import get_current_user, require_owners_agent
 from ..models.user import User
 from ..services.employee_performance_service import log_owner_created, EmployeePerformanceService
 from ..models.employee_performance import ActivityType
+from ..models.audit_log import AuditLog, ActivityType as AuditActivityType, EntityType as AuditEntityType
 
 router = APIRouter(prefix="/api/owners", tags=["الملاك"])
 
@@ -19,11 +20,17 @@ router = APIRouter(prefix="/api/owners", tags=["الملاك"])
 @router.get("")
 @router.get("/", response_model=List[OwnerResponse])
 async def get_all_owners(
+    include_deleted: bool = Query(False, description="تضمين المحذوفين"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """الحصول على قائمة جميع الملاك"""
-    owners = db.query(Owner).order_by(Owner.created_at.desc()).all()
+    query = db.query(Owner)
+    
+    if not include_deleted:
+        query = query.filter(Owner.is_deleted == False)
+    
+    owners = query.order_by(Owner.created_at.desc()).all()
     
     # Add project and unit counts
     result = []
@@ -132,6 +139,22 @@ async def create_owner(
     # تسجيل نشاط إضافة مالك
     log_owner_created(db, current_user.id, new_owner.id)
     
+    # تسجيل في سجل الأنشطة (AuditLog)
+    AuditLog.log(
+        db=db,
+        user=current_user,
+        activity_type=AuditActivityType.CREATE,
+        entity_type=AuditEntityType.OWNER,
+        entity_id=new_owner.id,
+        entity_name=new_owner.owner_name,
+        description=f"إضافة مالك جديد: {new_owner.owner_name}",
+        new_values={
+            "owner_name": new_owner.owner_name,
+            "owner_mobile_phone": new_owner.owner_mobile_phone,
+            "paypal_email": new_owner.paypal_email
+        }
+    )
+    
     return OwnerResponse(
         id=new_owner.id,
         owner_name=new_owner.owner_name,
@@ -179,6 +202,18 @@ async def update_owner(
         description=f"تعديل مالك: {owner.owner_name}"
     )
     
+    # تسجيل في سجل الأنشطة (AuditLog)
+    AuditLog.log(
+        db=db,
+        user=current_user,
+        activity_type=AuditActivityType.UPDATE,
+        entity_type=AuditEntityType.OWNER,
+        entity_id=owner.id,
+        entity_name=owner.owner_name,
+        description=f"تحديث بيانات مالك: {owner.owner_name}",
+        new_values=update_data
+    )
+    
     return OwnerResponse(
         id=owner.id,
         owner_name=owner.owner_name,
@@ -196,10 +231,17 @@ async def update_owner(
 @router.delete("/{owner_id}/")
 async def delete_owner(
     owner_id: str,
+    permanent: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_owners_agent)
 ):
-    """حذف مالك (للمدير فقط)"""
+    """
+    حذف مالك
+    - permanent=false (افتراضي): Soft Delete - يتم إخفاءه فقط
+    - permanent=true: حذف نهائي (للمدير فقط)
+    """
+    from datetime import datetime
+    
     owner = db.query(Owner).filter(Owner.id == owner_id).first()
     if not owner:
         raise HTTPException(
@@ -207,7 +249,75 @@ async def delete_owner(
             detail="المالك غير موجود"
         )
     
-    db.delete(owner)
+    if permanent:
+        # حذف نهائي - للمدير فقط
+        if current_user.role not in ['admin', 'system_owner']:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="الحذف النهائي متاح للمدير فقط"
+            )
+        # تسجيل في سجل الأنشطة قبل الحذف
+        AuditLog.log(
+            db=db,
+            user=current_user,
+            activity_type=AuditActivityType.PERMANENT_DELETE,
+            entity_type=AuditEntityType.OWNER,
+            entity_id=owner.id,
+            entity_name=owner.owner_name,
+            description=f"حذف نهائي لمالك: {owner.owner_name}"
+        )
+        db.delete(owner)
+        db.commit()
+        return {"message": "تم حذف المالك نهائياً"}
+    else:
+        # Soft Delete
+        owner.is_deleted = True
+        owner.deleted_at = datetime.utcnow()
+        owner.deleted_by_id = current_user.id
+        db.commit()
+        
+        # تسجيل في سجل الأنشطة
+        AuditLog.log(
+            db=db,
+            user=current_user,
+            activity_type=AuditActivityType.DELETE,
+            entity_type=AuditEntityType.OWNER,
+            entity_id=owner.id,
+            entity_name=owner.owner_name,
+            description=f"حذف مالك: {owner.owner_name}"
+        )
+        return {"message": "تم حذف المالك بنجاح"}
+
+
+@router.patch("/{owner_id}/restore")
+@router.patch("/{owner_id}/restore/")
+async def restore_owner(
+    owner_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_owners_agent)
+):
+    """استعادة مالك محذوف"""
+    owner = db.query(Owner).filter(Owner.id == owner_id, Owner.is_deleted == True).first()
+    if not owner:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="المالك غير موجود أو غير محذوف"
+        )
+    
+    owner.is_deleted = False
+    owner.deleted_at = None
+    owner.deleted_by_id = None
     db.commit()
     
-    return {"message": "تم حذف المالك بنجاح"}
+    # تسجيل في سجل الأنشطة
+    AuditLog.log(
+        db=db,
+        user=current_user,
+        activity_type=AuditActivityType.RESTORE,
+        entity_type=AuditEntityType.OWNER,
+        entity_id=owner.id,
+        entity_name=owner.owner_name,
+        description=f"استعادة مالك: {owner.owner_name}"
+    )
+    
+    return {"message": "تم استعادة المالك بنجاح"}

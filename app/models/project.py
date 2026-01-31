@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, ForeignKey, DateTime, Numeric, Integer
+from sqlalchemy import Column, String, ForeignKey, DateTime, Numeric, Integer, Boolean
 from sqlalchemy.orm import relationship
 from ..database import Base
 import enum
@@ -38,12 +38,20 @@ class Project(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
+    # Soft Delete
+    is_deleted = Column(Boolean, default=False, index=True)
+    deleted_at = Column(DateTime, nullable=True)
+    deleted_by_id = Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    
     # Relationships
     owner = relationship("Owner", back_populates="projects")
     units = relationship("Unit", back_populates="project", cascade="all, delete-orphan")
     transactions = relationship("Transaction", back_populates="project", cascade="all, delete-orphan")
     created_by = relationship("User", foreign_keys=[created_by_id])
     updated_by = relationship("User", foreign_keys=[updated_by_id])
+    
+    # Channel Integrations
+    channel_connections = relationship("ChannelConnection", back_populates="project", cascade="all, delete-orphan")
     
     def __repr__(self):
         return f"<Project {self.name}>"

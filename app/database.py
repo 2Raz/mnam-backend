@@ -121,6 +121,22 @@ def run_migrations():
         ("customers.is_banned", "ALTER TABLE customers ADD COLUMN IF NOT EXISTS is_banned BOOLEAN DEFAULT FALSE"),
         ("customers.ban_reason", "ALTER TABLE customers ADD COLUMN IF NOT EXISTS ban_reason TEXT"),
         ("customers.gender", "ALTER TABLE customers ADD COLUMN IF NOT EXISTS gender VARCHAR(20)"),
+        
+        # Employee Tasks table (create if not exists)
+        ("employee_tasks_table", """
+            CREATE TABLE IF NOT EXISTS employee_tasks (
+                id VARCHAR(36) PRIMARY KEY,
+                title VARCHAR(255) NOT NULL,
+                description TEXT,
+                due_date DATE,
+                status VARCHAR(20) DEFAULT 'todo',
+                assigned_to_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                created_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """),
+        ("employee_tasks.idx_assigned", "CREATE INDEX IF NOT EXISTS idx_employee_tasks_assigned_to ON employee_tasks(assigned_to_id)"),
     ]
     
     with engine.connect() as conn:

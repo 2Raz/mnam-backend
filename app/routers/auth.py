@@ -19,6 +19,8 @@ from ..utils.security import (
 from ..utils.rate_limiter import limiter
 from ..utils.audit_logger import log_auth_event, get_request_id
 from ..utils.dependencies import get_current_user
+from ..services.session_tracking_service import SessionTrackingService
+from ..models.audit_log import AuditLog, ActivityType as AuditActivityType, EntityType as AuditEntityType
 
 router = APIRouter(prefix="/api/auth", tags=["المصادقة"])
 
@@ -139,6 +141,14 @@ async def login(
     user.last_login = datetime.utcnow()
     db.commit()
     
+    # Start session tracking
+    session_service = SessionTrackingService(db)
+    session_service.start_session(
+        employee_id=user.id,
+        ip_address=client_ip,
+        user_agent=request.headers.get("User-Agent", "")[:500]
+    )
+    
     # Set cookies
     set_auth_cookies(response, access_token, refresh_token)
     
@@ -149,6 +159,19 @@ async def login(
         success=True,
         ip_address=client_ip,
         request_id=request_id
+    )
+    
+    # تسجيل في سجل الأنشطة (AuditLog)
+    AuditLog.log(
+        db=db,
+        user=user,
+        activity_type=AuditActivityType.LOGIN,
+        entity_type=AuditEntityType.USER,
+        entity_id=user.id,
+        entity_name=f"{user.first_name} {user.last_name}",
+        description=f"تسجيل دخول: {user.username}",
+        ip_address=client_ip,
+        user_agent=request.headers.get("User-Agent", "")[:500]
     )
     
     # Return user info (tokens are in cookies)
@@ -283,12 +306,38 @@ async def refresh_tokens(
     user_id = payload.get("sub")
     token_hash = hash_token(refresh_token)
     
-    # Find refresh token in DB
-    stored_token = db.query(RefreshToken).filter(
+    # ====== Race Condition Prevention ======
+    # Use with_for_update to lock the token row during rotation
+    # This prevents the same token from being used twice in parallel requests
+    from ..utils.db_helpers import is_postgres
+    
+    query = db.query(RefreshToken).filter(
         RefreshToken.token_hash == token_hash,
         RefreshToken.user_id == user_id,
         RefreshToken.is_revoked == False
-    ).first()
+    )
+    
+    # Apply row-level locking on PostgreSQL
+    if is_postgres(db):
+        query = query.with_for_update(nowait=True)
+    
+    try:
+        stored_token = query.first()
+    except Exception as e:
+        # Token is locked by another request - this means concurrent refresh attempt
+        log_auth_event(
+            "REFRESH",
+            user_id=user_id,
+            success=False,
+            details=f"Token locked by concurrent request: {e}",
+            ip_address=client_ip,
+            request_id=request_id
+        )
+        clear_auth_cookies(response)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="يتم تجديد الجلسة من جهاز آخر، يرجى المحاولة لاحقاً"
+        )
     
     if not stored_token or not stored_token.is_valid:
         log_auth_event(
@@ -379,6 +428,11 @@ async def logout(
             stored_token.revoked_at = datetime.utcnow()
             db.commit()
     
+    # End session tracking
+    if user_id:
+        session_service = SessionTrackingService(db)
+        session_service.end_session(user_id)
+    
     # Clear all auth cookies
     clear_auth_cookies(response)
     
@@ -388,6 +442,22 @@ async def logout(
         success=True,
         request_id=request_id
     )
+    
+    # تسجيل في سجل الأنشطة (AuditLog) - إذا كان المستخدم معروف
+    if user_id:
+        user = db.query(User).filter(User.id == user_id).first()
+        if user:
+            AuditLog.log(
+                db=db,
+                user=user,
+                activity_type=AuditActivityType.LOGOUT,
+                entity_type=AuditEntityType.USER,
+                entity_id=user.id,
+                entity_name=f"{user.first_name} {user.last_name}",
+                description=f"تسجيل خروج: {user.username}",
+                ip_address=get_client_ip(request),
+                user_agent=request.headers.get("User-Agent", "")[:500]
+            )
     
     return MessageResponse(
         message="تم تسجيل الخروج بنجاح",

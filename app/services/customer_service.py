@@ -115,7 +115,13 @@ def upsert_customer_from_booking(
     
     Returns:
         Tuple[Customer, bool]: (العميل، هل تم إنشاؤه جديداً)
+    
+    Note:
+        Uses row-level locking to prevent duplicate customer creation
+        in concurrent booking scenarios.
     """
+    from ..utils.db_helpers import acquire_row_lock, is_postgres
+    
     # تنظيف البيانات
     clean_name = sanitize_name(name)
     normalized_phone = normalize_phone(phone)
@@ -129,10 +135,13 @@ def upsert_customer_from_booking(
         elif gender_lower in ['female', 'أنثى', 'انثى', 'f']:
             gender_enum = GenderEnum.FEMALE
     
-    # البحث عن العميل بالرقم
-    customer = db.query(Customer).filter(
+    # ========== البحث عن العميل بالرقم مع قفل (لمنع Race Condition) ==========
+    # استخدام with_for_update لقفل الصف أثناء البحث
+    customer = acquire_row_lock(
+        db, 
+        Customer, 
         Customer.phone == normalized_phone
-    ).first()
+    )
     
     is_new_customer = False
     
@@ -148,7 +157,7 @@ def upsert_customer_from_booking(
         if gender_enum and not customer.gender:
             customer.gender = gender_enum
         
-        # زيادة عدد الحجوزات
+        # زيادة عدد الحجوزات (Atomic increment عبر SQL إذا متاح)
         if is_new_booking:
             customer.booking_count = (customer.booking_count or 0) + 1
             # إضافة مبلغ الحجز للإيراد الكلي
