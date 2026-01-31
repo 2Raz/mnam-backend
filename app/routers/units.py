@@ -156,6 +156,8 @@ def to_unit_response(unit: Unit) -> UnitResponse:
         amenities=unit.amenities or [],
         description=unit.description,
         permit_no=unit.permit_no,
+        access_info=unit.access_info,
+        booking_links=unit.booking_links or [],
         project_name=project.name if project else "غير معروف",
         owner_name=owner_name,
         city=project.city if project else None,
@@ -310,6 +312,8 @@ async def create_unit(
         amenities=unit_data.amenities,
         description=unit_data.description,
         permit_no=unit_data.permit_no,
+        access_info=unit_data.access_info,
+        booking_links=unit_data.booking_links,
         created_by_id=current_user.id
     )
     
