@@ -3,9 +3,9 @@
 Tests for Daily Bookings Count and Tasks
 """
 import pytest
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from unittest.mock import patch, MagicMock
-import pytz
+from zoneinfo import ZoneInfo
 
 # Mock database session
 @pytest.fixture
@@ -68,7 +68,7 @@ class TestDailyBookingsCount:
         """يجب أن يرجع تاريخ اليوم بتوقيت الرياض"""
         from app.routers.tasks import get_today_riyadh
         
-        riyadh_tz = pytz.timezone("Asia/Riyadh")
+        riyadh_tz = ZoneInfo("Asia/Riyadh")
         expected = datetime.now(riyadh_tz).date()
         
         result = get_today_riyadh()
@@ -195,7 +195,7 @@ class TestTimezoneHandling:
     
     def test_riyadh_timezone_offset(self):
         """يجب أن يكون فرق توقيت الرياض +3"""
-        riyadh_tz = pytz.timezone("Asia/Riyadh")
+        riyadh_tz = ZoneInfo("Asia/Riyadh")
         now = datetime.now(riyadh_tz)
         
         # Riyadh is UTC+3
@@ -205,13 +205,11 @@ class TestTimezoneHandling:
     
     def test_date_boundary_conversion(self):
         """يجب أن يتحول حد التاريخ بشكل صحيح بين المناطق الزمنية"""
-        riyadh_tz = pytz.timezone("Asia/Riyadh")
+        riyadh_tz = ZoneInfo("Asia/Riyadh")
         
         # 00:00 Riyadh = 21:00 UTC previous day
-        riyadh_midnight = riyadh_tz.localize(
-            datetime.combine(date.today(), datetime.min.time())
-        )
-        utc_equivalent = riyadh_midnight.astimezone(pytz.UTC)
+        riyadh_midnight = datetime.combine(date.today(), datetime.min.time(), tzinfo=riyadh_tz)
+        utc_equivalent = riyadh_midnight.astimezone(timezone.utc)
         
         # The hour in UTC should be 21 (or 24-3)
         assert utc_equivalent.hour == 21 or (utc_equivalent.hour == 0 and utc_equivalent.day == riyadh_midnight.day)

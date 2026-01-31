@@ -6,8 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, cast, Date
 from typing import Optional, List
-from datetime import date, datetime, timedelta
-import pytz
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from ..database import get_db
 from ..models.user import User
@@ -22,24 +22,24 @@ router = APIRouter(prefix="/api/tasks", tags=["Tasks"])
 # ======== Helper: Timezone-aware Today ========
 def get_today_riyadh() -> date:
     """Get today's date in Asia/Riyadh timezone"""
-    riyadh_tz = pytz.timezone("Asia/Riyadh")
+    riyadh_tz = ZoneInfo("Asia/Riyadh")
     return datetime.now(riyadh_tz).date()
 
 
 def get_today_start_utc() -> datetime:
     """Get start of today (Asia/Riyadh) in UTC"""
-    riyadh_tz = pytz.timezone("Asia/Riyadh")
+    riyadh_tz = ZoneInfo("Asia/Riyadh")
     today_riyadh = datetime.now(riyadh_tz).date()
-    start_of_day = riyadh_tz.localize(datetime.combine(today_riyadh, datetime.min.time()))
-    return start_of_day.astimezone(pytz.UTC).replace(tzinfo=None)
+    start_of_day = datetime.combine(today_riyadh, datetime.min.time(), tzinfo=riyadh_tz)
+    return start_of_day.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def get_today_end_utc() -> datetime:
     """Get end of today (Asia/Riyadh) in UTC"""
-    riyadh_tz = pytz.timezone("Asia/Riyadh")
+    riyadh_tz = ZoneInfo("Asia/Riyadh")
     today_riyadh = datetime.now(riyadh_tz).date()
-    end_of_day = riyadh_tz.localize(datetime.combine(today_riyadh, datetime.max.time()))
-    return end_of_day.astimezone(pytz.UTC).replace(tzinfo=None)
+    end_of_day = datetime.combine(today_riyadh, datetime.max.time(), tzinfo=riyadh_tz)
+    return end_of_day.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 # ======== حساب الحجوزات اليومية مباشرة من Booking table ========

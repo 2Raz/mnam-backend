@@ -36,8 +36,9 @@ class Settings(BaseSettings):
     
     # CORS - Frontend URLs from environment (comma-separated)
     allowed_origins: str = Field(
-        default="http://localhost:3000,http://127.0.0.1:3000,http://localhost:3002,http://127.0.0.1:3002,http://localhost:5173,http://127.0.0.1:5173,https://mnam-sys-dash.vercel.app",
+        default="http://localhost:3000,http://127.0.0.1:3000,http://localhost:3002,http://127.0.0.1:3002,http://localhost:5173,http://127.0.0.1:5173,https://mnam-sys-dash.vercel.app,",
         alias="ALLOWED_ORIGINS"
+
     )
     
     # ==============================================
