@@ -35,10 +35,10 @@ class Settings(BaseSettings):
     gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
     
     # CORS - Frontend URLs from environment (comma-separated)
+    # NOTE: Only add frontend domains here, NOT the API domain itself!
     allowed_origins: str = Field(
-        default="http://localhost:3000,http://127.0.0.1:3000,http://localhost:3002,http://127.0.0.1:3002,http://localhost:5173,http://127.0.0.1:5173,https://mnam-sys-dash.vercel.app,https://api.usemnam.com,https://admin.usemnam.com",
+        default="http://localhost:3000,http://127.0.0.1:3000,http://localhost:3002,http://127.0.0.1:3002,http://localhost:5173,http://127.0.0.1:5173,https://mnam-sys-dash.vercel.app,https://admin.usemnam.com",
         alias="ALLOWED_ORIGINS"
-
     )
     
     # ==============================================
