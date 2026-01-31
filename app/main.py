@@ -275,3 +275,16 @@ async def root():
 @app.get("/health/")
 async def health_check():
     return {"status": "healthy"}
+
+
+@app.get("/debug/cors")
+async def debug_cors(request: Request):
+    """Debug endpoint to check CORS configuration"""
+    origin = request.headers.get("origin", "no-origin-header")
+    return {
+        "request_origin": origin,
+        "allowed_origins": settings.cors_origins,
+        "origin_allowed": origin in settings.cors_origins,
+        "environment": settings.environment,
+        "env_var_raw": settings.allowed_origins
+    }
