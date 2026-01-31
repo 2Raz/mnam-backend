@@ -12,7 +12,7 @@
 
 ## 📖 نظرة عامة
 
-خادم REST API لنظام إدارة العقارات والحجوزات، مبني بـ FastAPI مع PostgreSQL.
+خادم REST API لنظام إدارة العقارات والحجوزات، مبني بـ FastAPI مع PostgreSQL. يتضمن محرك تسعير ديناميكي وتكامل مع قنوات الحجز (Channex).
 
 ---
 
@@ -34,6 +34,8 @@ mnam-backend/
 │   │   ├── booking.py       # الحجوزات
 │   │   ├── customer.py      # العملاء
 │   │   ├── transaction.py   # المعاملات المالية
+│   │   ├── pricing.py       # 🆕 سياسات التسعير
+│   │   ├── channel_integration.py  # 🆕 تكامل القنوات
 │   │   └── employee_performance.py  # أداء الموظفين
 │   │
 │   ├── routers/             # API Endpoints
@@ -47,14 +49,28 @@ mnam-backend/
 │   │   ├── transactions.py  # المعاملات المالية
 │   │   ├── dashboard.py     # ملخص لوحة التحكم
 │   │   ├── ai.py            # المساعد الذكي
+│   │   ├── pricing.py       # 🆕 محرك التسعير
+│   │   ├── integrations.py  # 🆕 تكامل Channex
 │   │   └── employee_performance.py  # أداء الموظفين
 │   │
 │   ├── schemas/             # Pydantic Schemas
+│   │   ├── pricing.py       # 🆕 schemas التسعير
+│   │   └── integration.py   # 🆕 schemas التكامل
+│   │
 │   ├── services/            # منطق الأعمال
+│   │   ├── pricing_engine.py     # 🆕 محرك التسعير
+│   │   ├── channex_client.py     # 🆕 عميل Channex API
+│   │   ├── channex_webhook.py    # 🆕 معالج Webhooks
+│   │   └── outbox_worker.py      # 🆕 معالج الأحداث
+│   │
 │   └── utils/               # أدوات مساعدة
-│       └── security.py      # تشفير وJWT
+│       ├── security.py      # تشفير وJWT
+│       ├── dependencies.py  # FastAPI Dependencies
+│       └── rate_limiter.py  # Rate Limiting
 │
-├── migrations/              # Alembic migrations
+├── alembic/                 # Alembic migrations
+├── tests/                   # 🆕 اختبارات
+├── docs/                    # 🆕 وثائق التصميم
 ├── requirements.txt         # المتطلبات
 ├── Procfile                 # Railway deployment
 └── railway.json             # إعدادات Railway
@@ -86,6 +102,7 @@ mnam-backend/
 - contract_no, contract_status, contract_duration
 - commission_percent, bank_name, bank_iban
 - units (relationship)
+- channel_connections (relationship)  # 🆕
 ```
 
 ### Unit (الوحدة)
@@ -95,14 +112,34 @@ mnam-backend/
 - status: متاحة | محجوزة | صيانة | ...
 - price_days_of_week, price_in_weekends
 - amenities, description, permit_no
+- pricing_policy (relationship)     # 🆕 تُنشأ تلقائياً
+- external_mappings (relationship)  # 🆕
+```
+
+#### 🆕 إنشاء سياسة التسعير تلقائياً
+عند إنشاء/تعديل وحدة، يتم إنشاء `PricingPolicy` تلقائياً:
+```json
+POST /api/units/
+{
+  "unit_name": "شقة 101",
+  "price_days_of_week": 100,
+  "price_in_weekends": 250,
+  // حقول التسعير الجديدة (اختياري)
+  "base_weekday_price": 100,
+  "weekend_markup_percent": 150,
+  "discount_16_percent": 10,
+  "discount_21_percent": 20,
+  "discount_23_percent": 30
+}
 ```
 
 ### Booking (الحجز)
 ```python
 - id, unit_id, customer_id
-- guest_name, guest_phone, guest_gender (optional)
+- guest_name, guest_phone, guest_email
 - check_in_date, check_out_date
 - total_price, status, notes
+- channel_source, external_reservation_id  # 🆕 تتبع الحجوزات الخارجية
 ```
 
 ### Customer (العميل)
@@ -111,45 +148,87 @@ mnam-backend/
 - email, gender
 - booking_count, completed_booking_count, total_revenue
 - is_banned, ban_reason
-- is_profile_complete  # False if created from booking
+- is_profile_complete
+```
+
+### 🆕 PricingPolicy (سياسة التسعير)
+```python
+- unit_id (1:1 مع Unit)
+- base_weekday_price         # السعر الأساسي لأيام الأسبوع
+- weekend_markup_percent     # نسبة زيادة نهاية الأسبوع
+- discount_16_percent        # خصم من الساعة 16:00
+- discount_21_percent        # خصم من الساعة 21:00
+- discount_23_percent        # خصم من الساعة 23:00
+- timezone                   # المنطقة الزمنية (Asia/Riyadh)
+- weekend_days               # أيام نهاية الأسبوع (4,5 للسعودية)
+```
+
+### 🆕 ChannelConnection (اتصال القناة)
+```python
+- project_id
+- provider: "channex"
+- api_key, channex_property_id
+- status: active | inactive | error
+```
+
+### 🆕 ExternalMapping (ربط خارجي)
+```python
+- connection_id, unit_id
+- channex_room_type_id, channex_rate_plan_id
 ```
 
 ---
 
-## 🔄 Auto Customer Sync (مزامنة العملاء التلقائية)
+## 🧮 محرك التسعير الديناميكي
 
-عند إنشاء أي حجز جديد، النظام يقوم تلقائياً بـ:
+### الصيغة الحسابية
 
-### ✨ التنظيف (Sanitization)
-- **الاسم**: إزالة المسافات الزائدة والأحرف الغير مرغوبة
-- **الجوال**: توحيد الصيغة السعودية (05xxxxxxxx)
-  - Supports: `+966`, `966`, `00966`, `05`, `5`
-  - Removes: spaces, dashes, special chars
-
-### 🔀 Upsert Logic
 ```
-إذا العميل موجود (بنفس الجوال):
-  ├── تحديث الحقول الناقصة فقط (gender, email)
-  ├── زيادة booking_count
-  └── إضافة المبلغ لـ total_revenue
+base = base_weekday_price (مثال: 100 ريال)
 
-إذا العميل جديد:
-  ├── إنشاء تلقائي مع is_profile_complete = false
-  ├── booking_count = 1
-  └── total_revenue = مبلغ الحجز
+day_price = base if is_weekday else base * (1 + weekend_markup% / 100)
+    → مثال: 100 * 2.5 = 250 ريال (بزيادة 150%)
+
+active_discount = حسب الوقت المحلي:
+    - قبل 16:00  → 0%
+    - 16:00-20:59 → discount_16_percent
+    - 21:00-22:59 → discount_21_percent
+    - 23:00-23:59 → discount_23_percent
+
+final_price = round(day_price * (1 - active_discount% / 100), 2)
+    → مثال: 250 * 0.90 = 225 ريال (بخصم 10%)
 ```
 
-### 📋 API Endpoints
+### مثال عملي
+
+| الوقت | اليوم | السعر الأساسي | الزيادة | الخصم | السعر النهائي |
+|-------|-------|---------------|---------|-------|---------------|
+| 10:00 | الأحد | 100 | - | - | **100 ريال** |
+| 10:00 | الجمعة | 100 | +150% | - | **250 ريال** |
+| 18:00 | الجمعة | 100 | +150% | -10% | **225 ريال** |
+| 22:00 | الجمعة | 100 | +150% | -20% | **200 ريال** |
+
+---
+
+## 🔗 تكامل Channex
+
+### تدفق البيانات
+
 ```
-GET  /api/customers/stats      - إحصائيات العملاء
-GET  /api/customers/incomplete - العملاء ناقصة البيانات
-GET  /api/customers/           - قائمة العملاء (الناقصين أولاً)
+📤 Outbound (MNAM → Channex):
+   تحديث الأسعار ← PricingPolicy تتغير
+   تحديث التوفر ← Booking يُنشأ/يُلغى
+   
+📥 Inbound (Channex → MNAM):
+   Webhook → حجز جديد من Airbnb/Booking.com
+   Webhook → تعديل حجز
+   Webhook → إلغاء حجز
 ```
 
-### 🎯 CustomersDashboard Features
-- Banner للملفات الناقصة (created from bookings)
-- العملاء الناقصين في أعلى الجدول
-- زر "إكمال البيانات"
+### Webhook Endpoint
+```
+POST /api/integrations/channex/webhook
+```
 
 ---
 
@@ -190,6 +269,8 @@ DATABASE_URL=postgresql://user:password@localhost:5432/mnam_db
 SECRET_KEY=your-super-secret-key-here
 ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=1440
+REFRESH_TOKEN_EXPIRE_DAYS=7
+ENVIRONMENT=development
 ```
 
 ### تشغيل الخادم
@@ -209,6 +290,8 @@ gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker
 | Method | Endpoint | الوصف |
 |--------|----------|-------|
 | POST | `/api/auth/login` | تسجيل الدخول |
+| POST | `/api/auth/refresh` | تجديد الجلسة |
+| POST | `/api/auth/logout` | تسجيل الخروج |
 | GET | `/api/auth/me` | بيانات المستخدم الحالي |
 
 ### 👥 Users
@@ -219,16 +302,26 @@ gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker
 | PUT | `/api/users/{id}` | تعديل مستخدم |
 | DELETE | `/api/users/{id}` | حذف مستخدم |
 
-### 🏢 Owners
+### � 💰 Pricing (التسعير)
 | Method | Endpoint | الوصف |
 |--------|----------|-------|
-| GET | `/api/owners/` | قائمة الملاك |
-| POST | `/api/owners/` | إضافة مالك |
-| PUT | `/api/owners/{id}` | تعديل مالك |
-| DELETE | `/api/owners/{id}` | حذف مالك |
+| POST | `/api/pricing/policies` | إنشاء سياسة تسعير |
+| GET | `/api/pricing/policies/{unit_id}` | جلب سياسة الوحدة |
+| PUT | `/api/pricing/policies/{unit_id}` | تحديث السياسة |
+| GET | `/api/pricing/calendar/{unit_id}` | تقويم الأسعار |
+| GET | `/api/pricing/realtime/{unit_id}` | السعر اللحظي |
+| POST | `/api/pricing/calculate-booking` | حساب إجمالي الحجز |
 
-### 🏠 Projects / Units / Bookings
-مماثل للـ endpoints أعلاه.
+### � 🔗 Integrations (التكامل)
+| Method | Endpoint | الوصف |
+|--------|----------|-------|
+| POST | `/api/integrations/connections` | إنشاء اتصال |
+| GET | `/api/integrations/connections/{id}/health` | صحة الاتصال |
+| POST | `/api/integrations/connections/{id}/sync` | مزامنة يدوية |
+| POST | `/api/integrations/mappings` | ربط وحدة |
+| POST | `/api/integrations/channex/webhook` | استقبال Webhooks |
+| GET | `/api/integrations/outbox` | أحداث قيد الانتظار |
+| GET | `/api/integrations/logs` | سجلات التكامل |
 
 ### 📊 Dashboard
 | Method | Endpoint | الوصف |
@@ -245,6 +338,21 @@ gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker
 
 ---
 
+## 🧪 الاختبارات
+
+```bash
+# تشغيل جميع الاختبارات
+pytest tests/ -v
+
+# اختبار محرك التسعير
+pytest tests/test_pricing_engine.py -v
+
+# اختبار Webhooks
+pytest tests/test_channex_webhook.py -v
+```
+
+---
+
 ## 🚀 النشر على Railway
 
 ### Procfile
@@ -252,42 +360,19 @@ gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker
 web: alembic upgrade head && gunicorn app.main:app -w 2 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 120
 ```
 
-### railway.json
-```json
-{
-  "build": {
-    "builder": "NIXPACKS"
-  },
-  "deploy": {
-    "startCommand": "alembic upgrade head && gunicorn app.main:app -w 2 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 120",
-    "healthcheckPath": "/health",
-    "healthcheckTimeout": 60,
-    "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 10
-  }
-}
-```
-
 ### متغيرات البيئة على Railway
 1. `DATABASE_URL` - من PostgreSQL service
 2. `SECRET_KEY` - مفتاح سري قوي
 3. `ALGORITHM` - HS256
 4. `ACCESS_TOKEN_EXPIRE_MINUTES` - 1440
-5. `ENVIRONMENT` - production
+5. `REFRESH_TOKEN_EXPIRE_DAYS` - 7
+6. `ENVIRONMENT` - production
 
 ---
 
-## 🗄️ DB Migrations on Railway
+## 🗄️ DB Migrations
 
-### كيف تعمل Migrations تلقائياً؟
-
-عند كل **Redeploy** على Railway:
-1. ينفذ `alembic upgrade head` أولاً
-2. تُطبق كل migrations الجديدة
-3. ثم يبدأ السيرفر
-
-### إضافة Migration جديد (محلياً)
-
+### إضافة Migration جديد
 ```bash
 # Windows
 migrate.bat new "add_new_column"
@@ -297,70 +382,11 @@ alembic revision --autogenerate -m "add_new_column"
 ```
 
 ### أوامر مفيدة
-
 ```bash
-# تطبيق كل migrations
-alembic upgrade head
-
-# التراجع migration واحد
-alembic downgrade -1
-
-# عرض الحالة الحالية
-alembic current
-
-# عرض التاريخ
-alembic history
-```
-
-### ⚠️ قواعد الأمان (مهم جداً!)
-
-عند إنشاء migration جديد:
-
-1. **الأعمدة الجديدة** يجب أن تكون:
-   - `nullable=True` (اختياري)
-   - أو `server_default='value'` (قيمة افتراضية)
-   
-   ```python
-   # ✅ صحيح
-   op.add_column('users', sa.Column('avatar', sa.String(), nullable=True))
-   op.add_column('users', sa.Column('points', sa.Integer(), server_default='0'))
-   
-   # ❌ خطأ - سيفشل إذا كانت هناك بيانات
-   op.add_column('users', sa.Column('required_field', sa.String(), nullable=False))
-   ```
-
-2. **حذف الأعمدة**: لا تحذف مباشرة، استخدم:
-   - أولاً: اجعله nullable
-   - ثم: بعد فترة، احذفه
-
-3. **تغيير نوع العمود**: استخدم migration تدريجي:
-   - أنشئ عمود جديد بالنوع الجديد
-   - انقل البيانات
-   - احذف القديم
-   - أعد تسمية الجديد
-
-### هيكل مجلد alembic
-```
-alembic/
-├── env.py           # إعدادات Environment
-├── script.py.mako   # قالب Migration
-└── versions/        # ملفات Migration
-    ├── 001_initial.py
-    └── ...
-```
-
----
-
-## 🧪 اختبار API
-
-```bash
-# Health check
-curl http://localhost:8000/health
-
-# Login
-curl -X POST http://localhost:8000/api/auth/login \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "username=admin&password=admin"
+alembic upgrade head       # تطبيق كل migrations
+alembic downgrade -1       # التراجع migration واحد
+alembic current            # عرض الحالة الحالية
+alembic history            # عرض التاريخ
 ```
 
 ---
@@ -370,7 +396,7 @@ curl -X POST http://localhost:8000/api/auth/login \
 | Username | Password | Role |
 |----------|----------|------|
 | Head_Admin | H112as112! | system_owner |
-| admin | admin | admin |
+| admin | Admin123! | admin |
 
 ---
 
@@ -379,3 +405,4 @@ curl -X POST http://localhost:8000/api/auth/login \
 **جزء من نظام مِنَام العقاري 🏠**
 
 </div>
+# mnam-backend
