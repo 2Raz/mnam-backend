@@ -1,2 +1,49 @@
-# Alembic versions directory placeholder
-# Migration files will be stored here
+# Alembic Migrations Directory
+
+## Current Schema
+- **001_full_schema.py**: Complete database schema (consolidated migration)
+
+## Tables Included (26 tables):
+1. users - المستخدمين
+2. refresh_tokens - رموز التحديث
+3. owners - الملاك
+4. projects - المشاريع
+5. units - الوحدات
+6. customers - العملاء
+7. bookings - الحجوزات
+8. transactions - المعاملات المالية
+9. notifications - الإشعارات
+10. employee_activity_logs - سجل أنشطة الموظفين
+11. employee_targets - أهداف الموظفين
+12. employee_performance_summaries - ملخص أداء الموظفين
+13. employee_tasks - مهام الموظفين
+14. employee_sessions - جلسات الموظفين
+15. employee_attendance - حضور الموظفين
+16. pricing_policies - سياسات التسعير
+17. channel_connections - اتصالات القنوات (Channex)
+18. external_mappings - ربط الوحدات بالقنوات الخارجية
+19. integration_outbox - صندوق صادر التكاملات
+20. integration_logs - سجلات التكاملات
+21. inbound_idempotency - منع التكرار للواردات
+22. integration_audit - تدقيق التكاملات
+23. webhook_event_logs - سجل أحداث الويب هوك
+24. property_rate_states - حالة معدل العقارات
+25. unmatched_webhook_events - أحداث الويب هوك غير المطابقة
+26. audit_logs - سجل المراجعة
+
+## Usage
+```bash
+# Apply migrations
+alembic upgrade head
+
+# Create new migration
+alembic revision -m "description"
+
+# Rollback
+alembic downgrade -1
+```
+
+## Important Notes
+- This is a fresh schema started on 2026-01-31
+- All previous migrations were consolidated into 001_full_schema.py
+- Database must be recreated for new installations
