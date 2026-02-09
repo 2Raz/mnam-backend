@@ -390,3 +390,45 @@ def _trigger_price_sync(db: Session, unit_id: str):
             )
         except Exception:
             pass  # Don't fail if enqueue fails
+
+
+# ==================
+# Scheduler Control
+# ==================
+
+@router.post("/trigger-discount-sync")
+async def trigger_discount_sync(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    تشغيل مزامنة الأسعار يدوياً.
+    
+    يُستخدم لتحديث الأسعار في Channex فوراً دون انتظار الوقت المجدول.
+    """
+    from ..services.price_scheduler import trigger_manual_sync
+    
+    result = trigger_manual_sync()
+    
+    return {
+        "success": len(result.get("errors", [])) == 0,
+        "units_synced": result.get("units_synced", 0),
+        "connections_checked": result.get("connections_checked", 0),
+        "errors": result.get("errors", []),
+        "message": "تمت إضافة طلبات المزامنة للـ outbox"
+    }
+
+
+@router.get("/scheduler-status")
+async def get_scheduler_status(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    الحصول على حالة الـ scheduler.
+    
+    يُعيد معلومات عن حالة التشغيل وأوقات المزامنة القادمة.
+    """
+    from ..services.price_scheduler import get_scheduler_status as get_status
+    
+    return get_status()
+

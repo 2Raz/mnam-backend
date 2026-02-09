@@ -19,6 +19,9 @@ from .utils.logging_config import setup_logging, set_request_context, clear_requ
 from .routers import auth, users, owners, projects, units, bookings, transactions, dashboard, ai, customers, employee_performance
 from .routers import pricing, integrations, tasks, notifications, export, search, alerts, audit, health, metrics
 
+# Import price scheduler
+from .services.price_scheduler import start_price_scheduler, stop_price_scheduler
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -163,6 +166,12 @@ async def lifespan(app: FastAPI):
     if settings.channex_enabled:
         worker_task = asyncio.create_task(run_integration_worker())
         print("🔄 Integration Worker started in background")
+        
+        # Start price scheduler for automatic discount syncs
+        if start_price_scheduler():
+            print("📅 Price Scheduler started (00:00, 16:00, 21:00, 23:00)")
+        else:
+            print("⚠️  Failed to start Price Scheduler")
     else:
         print("⚠️  Channex integration disabled, worker not started")
     
@@ -171,6 +180,10 @@ async def lifespan(app: FastAPI):
     # Shutdown
     print("👋 Shutting down mnam-backend...")
     worker_running = False
+    
+    # Stop price scheduler
+    stop_price_scheduler()
+    
     if worker_task:
         worker_task.cancel()
         try:
