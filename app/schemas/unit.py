@@ -139,6 +139,8 @@ class UnitForSelect(BaseModel):
     unit_name: str
     price_days_of_week: Decimal
     price_in_weekends: Decimal
+    status: str  # حالة الوحدة للتحقق عند الحجز
     
     class Config:
         from_attributes = True
+

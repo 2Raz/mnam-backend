@@ -28,11 +28,13 @@ from ..models.channel_integration import (
     InboundIdempotency,
     ConnectionStatus
 )
-from ..models.booking import Booking, BookingStatus, BookingSource
+from ..models.booking import Booking, BookingStatus, BookingSource, SourceType
 from ..models.customer import Customer
 from ..models.unmatched_webhook import UnmatchedWebhookEvent, UnmatchedEventStatus, UnmatchedEventReason
+from ..models.booking_revision import BookingRevision
 from ..config import settings
 from .channex_client import ChannexClient
+from .inventory_service import InventoryService
 
 logger = logging.getLogger(__name__)
 
@@ -637,7 +639,21 @@ class WebhookProcessor:
         channel = data.get("ota_name") or data.get("channel") or "channex"
         channel_source = self._map_channel_source(channel)
         
-        # Create booking
+        # Build customer snapshot for archival
+        customer_snapshot = {
+            "name": guest_name,
+            "phone": guest_phone,
+            "email": guest_email,
+            "country": guest.get("country"),
+        }
+        
+        # Extract currency
+        currency = data.get("currency", "SAR")
+        
+        # Get revision_id for tracking
+        revision_id = data.get("revision_id")
+        
+        # Create booking with all new fields
         booking = Booking(
             unit_id=unit_id,
             customer_id=customer.id if customer else None,
@@ -649,26 +665,60 @@ class WebhookProcessor:
             total_price=data.get("total_price") or data.get("amount") or 0,
             status=self._map_booking_status(data.get("status")),
             notes=f"OTA Booking via {channel}",
+            source_type=SourceType.CHANNEX.value,
             channel_source=channel_source,
             external_reservation_id=reservation_id,
-            external_revision_id=data.get("revision_id"),
-            channel_data=json.dumps(data)
+            external_revision_id=revision_id,
+            channel_data=json.dumps(data),
+            # NEW: Customer snapshot for archival
+            customer_snapshot=customer_snapshot,
+            # NEW: Currency
+            currency=currency,
+            # NEW: Revision tracking
+            last_applied_revision_id=revision_id,
+            last_applied_revision_at=datetime.utcnow()
         )
         
         self.db.add(booking)
         self.db.commit()
         self.db.refresh(booking)
         
+        # NEW: Save revision for audit trail
+        if revision_id:
+            revision = BookingRevision(
+                booking_id=booking.id,
+                external_booking_id=reservation_id,
+                revision_id=revision_id,
+                event_type="new",
+                payload=data,
+                applied=True
+            )
+            self.db.add(revision)
+        
+        # NEW: Update inventory calendar
+        try:
+            inventory_service = InventoryService(self.db)
+            inventory_service.mark_dates_booked(
+                unit_id=unit_id,
+                booking_id=booking.id,
+                check_in=check_in,
+                check_out=check_out
+            )
+        except Exception as e:
+            logger.error(f"Failed to update inventory calendar: {e}")
+        
         # Record idempotency
         self._record_idempotency(
             event.event_id,
             reservation_id,
-            data.get("revision_id"),
+            revision_id,
             "created",
             booking.id
         )
         
-        # Queue availability update
+        self.db.commit()
+        
+        # Queue availability update to Channex
         self._queue_availability_update(connection.id, unit_id)
         
         logger.info(f"Created booking {booking.id} from Channex reservation {reservation_id}")
@@ -688,6 +738,7 @@ class WebhookProcessor:
         data = payload.get("data", {})
         property_id = payload.get("property_id") or data.get("property_id")
         reservation_id = data.get("id") or data.get("reservation_id")
+        revision_id = data.get("revision_id")
         
         # Find existing booking with row-level lock for concurrency safety
         booking = self.db.query(Booking).filter(
@@ -699,9 +750,70 @@ class WebhookProcessor:
             logger.info(f"Modified event for unknown booking {reservation_id}, creating new")
             return self._handle_booking_new(payload, event)
         
-        # Update booking fields
-        guest = data.get("guest", {}) or data.get("customer", {})
+        # ===== REVISION DEDUP: Check if this revision was already processed =====
+        if revision_id:
+            existing_revision = self.db.query(BookingRevision).filter(
+                BookingRevision.external_booking_id == reservation_id,
+                BookingRevision.revision_id == revision_id
+            ).first()
+            
+            if existing_revision:
+                logger.info(f"Revision {revision_id} already processed, skipping")
+                return WebhookProcessResult(
+                    success=True,
+                    action="skipped",
+                    booking_id=booking.id
+                )
         
+        # ===== OUT-OF-ORDER PROTECTION =====
+        # Compare with last applied revision timestamp
+        revision_timestamp = data.get("updated_at") or data.get("timestamp")
+        is_out_of_order = False
+        
+        if booking.last_applied_revision_at and revision_timestamp:
+            try:
+                new_ts = self._parse_datetime(revision_timestamp)
+                if new_ts and new_ts < booking.last_applied_revision_at:
+                    logger.warning(
+                        f"Out-of-order revision for booking {booking.id}: "
+                        f"new_ts={new_ts}, last_applied={booking.last_applied_revision_at}"
+                    )
+                    is_out_of_order = True
+            except Exception:
+                pass
+        
+        # Store old values for inventory diff
+        old_check_in = booking.check_in_date
+        old_check_out = booking.check_out_date
+        old_unit_id = booking.unit_id
+        
+        # Extract new values
+        guest = data.get("guest", {}) or data.get("customer", {})
+        new_check_in = self._parse_date(data.get("arrival_date") or data.get("check_in"))
+        new_check_out = self._parse_date(data.get("departure_date") or data.get("check_out"))
+        
+        # ===== SAVE REVISION (even if out-of-order) =====
+        if revision_id:
+            revision = BookingRevision(
+                booking_id=booking.id,
+                external_booking_id=reservation_id,
+                revision_id=revision_id,
+                event_type="modification",
+                payload=data,
+                applied=not is_out_of_order  # Mark as not applied if out-of-order
+            )
+            self.db.add(revision)
+        
+        # If out-of-order, don't apply changes to booking
+        if is_out_of_order:
+            self.db.commit()
+            return WebhookProcessResult(
+                success=True,
+                action="skipped_out_of_order",
+                booking_id=booking.id
+            )
+        
+        # ===== APPLY CHANGES TO BOOKING =====
         if guest.get("name") or guest.get("full_name"):
             booking.guest_name = guest.get("name") or guest.get("full_name")
         if guest.get("phone"):
@@ -709,10 +821,7 @@ class WebhookProcessor:
         if guest.get("email"):
             booking.guest_email = guest.get("email")
         
-        # Check if dates changed
-        new_check_in = self._parse_date(data.get("arrival_date") or data.get("check_in"))
-        new_check_out = self._parse_date(data.get("departure_date") or data.get("check_out"))
-        
+        # Update dates
         dates_changed = False
         if new_check_in and new_check_in != booking.check_in_date:
             booking.check_in_date = new_check_in
@@ -727,9 +836,31 @@ class WebhookProcessor:
         if data.get("status"):
             booking.status = self._map_booking_status(data.get("status"))
         
-        booking.external_revision_id = data.get("revision_id")
+        if data.get("currency"):
+            booking.currency = data.get("currency")
+        
+        # Update revision tracking
+        booking.external_revision_id = revision_id
+        booking.last_applied_revision_id = revision_id
+        booking.last_applied_revision_at = datetime.utcnow()
         booking.channel_data = json.dumps(data)
         booking.updated_at = datetime.utcnow()
+        
+        # ===== INVENTORY DIFF LOGIC =====
+        if dates_changed and new_check_in and new_check_out:
+            try:
+                inventory_service = InventoryService(self.db)
+                inventory_service.apply_booking_change(
+                    unit_id=booking.unit_id,
+                    booking_id=booking.id,
+                    old_check_in=old_check_in,
+                    old_check_out=old_check_out,
+                    new_check_in=new_check_in,
+                    new_check_out=new_check_out,
+                    old_unit_id=old_unit_id
+                )
+            except Exception as e:
+                logger.error(f"Failed to update inventory calendar for modification: {e}")
         
         self.db.commit()
         
@@ -737,7 +868,7 @@ class WebhookProcessor:
         self._record_idempotency(
             event.event_id,
             reservation_id,
-            data.get("revision_id"),
+            revision_id,
             "updated",
             booking.id
         )
@@ -748,7 +879,7 @@ class WebhookProcessor:
             if connection:
                 self._queue_availability_update(connection.id, booking.unit_id)
         
-        logger.info(f"Updated booking {booking.id} from Channex")
+        logger.info(f"Updated booking {booking.id} from Channex (revision: {revision_id})")
         
         return WebhookProcessResult(
             success=True,
@@ -787,9 +918,34 @@ class WebhookProcessor:
         
         # Cancel booking
         booking.status = BookingStatus.CANCELLED.value
-        booking.external_revision_id = data.get("revision_id")
+        revision_id = data.get("revision_id")
+        booking.external_revision_id = revision_id
         booking.notes = (booking.notes or "") + f"\nCancelled via Channex on {datetime.utcnow().isoformat()}"
         booking.updated_at = datetime.utcnow()
+        
+        # Save revision for audit trail
+        if revision_id:
+            revision = BookingRevision(
+                booking_id=booking.id,
+                external_booking_id=reservation_id,
+                revision_id=revision_id,
+                event_type="cancellation",
+                payload=data,
+                applied=True
+            )
+            self.db.add(revision)
+        
+        # FREE INVENTORY CALENDAR
+        try:
+            inventory_service = InventoryService(self.db)
+            inventory_service.apply_cancellation(
+                unit_id=booking.unit_id,
+                booking_id=booking.id,
+                check_in=booking.check_in_date,
+                check_out=booking.check_out_date
+            )
+        except Exception as e:
+            logger.error(f"Failed to free inventory calendar for cancellation: {e}")
         
         self.db.commit()
         
@@ -797,7 +953,7 @@ class WebhookProcessor:
         self._record_idempotency(
             event.event_id,
             reservation_id,
-            data.get("revision_id"),
+            revision_id,
             "cancelled",
             booking.id
         )
@@ -825,6 +981,24 @@ class WebhookProcessor:
         for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ", "%d/%m/%Y"):
             try:
                 return datetime.strptime(date_str.split("T")[0], fmt.split("T")[0]).date()
+            except ValueError:
+                continue
+        return None
+    
+    def _parse_datetime(self, dt_str: Optional[str]) -> Optional[datetime]:
+        """Parse a datetime string from Channex"""
+        if not dt_str:
+            return None
+        
+        for fmt in (
+            "%Y-%m-%dT%H:%M:%SZ",
+            "%Y-%m-%dT%H:%M:%S.%fZ",
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d"
+        ):
+            try:
+                return datetime.strptime(dt_str, fmt)
             except ValueError:
                 continue
         return None

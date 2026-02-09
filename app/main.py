@@ -5,16 +5,19 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from contextlib import asynccontextmanager
 from slowapi.errors import RateLimitExceeded
 import uuid
+import time
 
 from .config import settings
 from .database import create_tables, run_migrations, SessionLocal
 from .models.user import User, UserRole, SYSTEM_OWNER_DATA
 from .utils.security import hash_password
 from .utils.rate_limiter import limiter
+from .utils.metrics import record_http_request
+from .utils.logging_config import setup_logging, set_request_context, clear_request_context
 
 # Import all routers
 from .routers import auth, users, owners, projects, units, bookings, transactions, dashboard, ai, customers, employee_performance
-from .routers import pricing, integrations, tasks, notifications, export, search, alerts, audit
+from .routers import pricing, integrations, tasks, notifications, export, search, alerts, audit, health, metrics
 
 
 @asynccontextmanager
@@ -218,12 +221,41 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         request_id = request.headers.get("X-Request-ID", str(uuid.uuid4())[:8])
         request.state.request_id = request_id
+        
+        # Set logging context
+        set_request_context(request_id)
+        
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
+        
+        # Clear logging context
+        clear_request_context()
+        
+        return response
+
+
+# Metrics Middleware - records request duration and status
+class MetricsMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        start_time = time.perf_counter()
+        
+        response = await call_next(request)
+        
+        # Record metrics (skip metrics endpoint to avoid recursion)
+        if not request.url.path.startswith("/metrics"):
+            duration = time.perf_counter() - start_time
+            record_http_request(
+                method=request.method,
+                path=request.url.path,
+                status_code=response.status_code,
+                duration=duration
+            )
+        
         return response
 
 
 # Add other middleware AFTER CORS
+app.add_middleware(MetricsMiddleware)
 app.add_middleware(RequestIdMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 
@@ -257,6 +289,8 @@ app.include_router(export.router)
 app.include_router(search.router)
 app.include_router(alerts.router)
 app.include_router(audit.router)
+app.include_router(health.router)
+app.include_router(metrics.router)
 
 
 @app.get("")

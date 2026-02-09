@@ -218,16 +218,27 @@ async def get_units_for_select(
     current_user: User = Depends(get_current_user)
 ):
     """الحصول على قائمة مبسطة للوحدات (للـ Dropdown)"""
-    units = db.query(Unit).filter(Unit.project_id == project_id).all()
-    return [
-        UnitForSelect(
+    from ..services.unit_status_service import get_effective_unit_status
+    
+    units = db.query(Unit).filter(
+        Unit.project_id == project_id,
+        Unit.is_deleted == False  # استبعاد المحذوفين
+    ).all()
+    
+    result = []
+    for u in units:
+        # حساب الحالة الفعلية بناءً على الحجوزات
+        effective_status, has_bookings = get_effective_unit_status(db, u.id)
+        
+        result.append(UnitForSelect(
             id=u.id,
             unit_name=u.unit_name,
             price_days_of_week=u.price_days_of_week,
-            price_in_weekends=u.price_in_weekends
-        )
-        for u in units
-    ]
+            price_in_weekends=u.price_in_weekends,
+            status=effective_status  # الحالة الفعلية (المحسوبة)
+        ))
+    
+    return result
 
 
 @router.get("/{unit_id}")
@@ -437,6 +448,26 @@ async def update_unit(
         except Exception as e:
             # Don't fail unit update if sync fails
             print(f"Warning: Failed to enqueue price sync: {e}")
+    
+    # 🆕 مزامنة حالة الوحدة مع Channex عند تغيير الحالة
+    # نتحقق إذا تغيرت الحالة (بغض النظر عن كيفية وصول التحديث)
+    status_changed = old_status != unit.status
+    print(f"📊 Status check: old='{old_status}' | new='{unit.status}' | changed={status_changed}")
+    
+    if status_changed:
+        try:
+            from ..services.availability_sync_service import sync_unit_to_channex
+            
+            print(f"� Triggering Channex sync for unit '{unit.unit_name}' (status: {unit.status})")
+            result = sync_unit_to_channex(db, unit.id)
+            
+            if result.get("success"):
+                print(f"✅ Channex sync completed for unit '{unit.unit_name}'")
+            else:
+                print(f"⚠️ Channex sync failed: {result.get('error', 'Unknown error')}")
+        except Exception as e:
+            # لا نريد أن يفشل تحديث الوحدة بسبب فشل المزامنة
+            print(f"⚠️ Warning: Failed to sync unit status to Channex: {e}")
     
     # تسجيل النشاط
     service = EmployeePerformanceService(db)

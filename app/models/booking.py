@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 from sqlalchemy import Column, String, Date, Numeric, Text, ForeignKey, DateTime, Index, Boolean
+from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.orm import relationship
 from ..database import Base
 import enum
@@ -55,6 +56,16 @@ class Booking(Base):
     external_reservation_id = Column(String(255), nullable=True)  # OTA booking ID
     external_revision_id = Column(String(255), nullable=True)  # For modification tracking
     channel_data = Column(Text, nullable=True)  # JSON string with original OTA data
+    
+    # NEW: Customer snapshot for archival (immutable at booking time)
+    customer_snapshot = Column(JSON, nullable=True)  # {"name", "phone", "email", "country"}
+    
+    # NEW: Currency (separate from pricing policy for OTA bookings)
+    currency = Column(String(3), default="SAR")
+    
+    # NEW: Revision tracking for out-of-order protection
+    last_applied_revision_id = Column(String(255), nullable=True)
+    last_applied_revision_at = Column(DateTime, nullable=True)
     
     # تتبع الموظفين
     created_by_id = Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)

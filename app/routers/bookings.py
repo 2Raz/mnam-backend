@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
 from sqlalchemy.exc import OperationalError
@@ -33,6 +33,7 @@ from ..models.audit_log import AuditLog, ActivityType as AuditActivityType, Enti
 from ..models.channel_integration import ExternalMapping, ChannelConnection, ConnectionStatus
 from ..services.outbox_worker import enqueue_availability_update
 from ..utils.db_helpers import acquire_row_lock, is_postgres
+from ..utils.rate_limiter import limiter
 
 logger = logging.getLogger(__name__)
 
@@ -42,23 +43,21 @@ router = APIRouter(prefix="/api/bookings", tags=["الحجوزات"])
 def _sync_availability_to_channex(db: Session, unit_id: str):
     """
     مزامنة التوفر مع Channex بعد تغيير الحجوزات.
-    يتم إنشاء حدث في Outbox ليتم معالجته لاحقاً بواسطة Worker.
+    
+    يقوم بـ:
+    - حساب التوفر بناءً على حالة الوحدة والحجوزات النشطة
+    - إرسال التحديث مباشرة إلى Channex
     """
     try:
-        # البحث عن الـ mapping للوحدة
-        mapping = db.query(ExternalMapping).join(ChannelConnection).filter(
-            ExternalMapping.unit_id == unit_id,
-            ExternalMapping.is_active == True,
-            ChannelConnection.status == ConnectionStatus.ACTIVE.value
-        ).first()
+        from ..services.availability_sync_service import sync_unit_to_channex
         
-        if mapping:
-            enqueue_availability_update(
-                db=db,
-                unit_id=unit_id,
-                connection_id=mapping.connection_id,
-                days_ahead=365
-            )
+        result = sync_unit_to_channex(db, unit_id)
+        
+        if result.get("success"):
+            print(f"✅ Availability synced to Channex for unit {unit_id}")
+        else:
+            print(f"⚠️ Failed to sync availability: {result.get('error', 'Unknown')}")
+            
     except Exception as e:
         # لا نريد أن يفشل الحجز بسبب فشل المزامنة
         import logging
@@ -255,8 +254,10 @@ def to_booking_response(
 
 
 @router.get("")
-@router.get("/", response_model=List[BookingResponse])
+@router.get("/")
 async def get_all_bookings(
+    page: int = Query(1, ge=1, description="رقم الصفحة"),
+    page_size: int = Query(20, ge=1, le=100, description="عدد العناصر في الصفحة"),
     channel_source: Optional[str] = Query(None, description="تصفية حسب القناة (airbnb, booking.com, etc.)"),
     source_type: Optional[str] = Query(None, description="تصفية حسب المصدر (manual, channex, direct_api)"),
     has_external: Optional[bool] = Query(None, description="تصفية الحجوزات التي لها external_reservation_id"),
@@ -264,13 +265,19 @@ async def get_all_bookings(
     current_user: User = Depends(get_current_user)
 ):
     """
-    الحصول على قائمة جميع الحجوزات
+    الحصول على قائمة جميع الحجوزات مع pagination
     
     Filters:
     - channel_source: airbnb, booking.com, gathern, direct, etc.
     - source_type: manual, channex, direct_api
     - has_external: true/false - للحجوزات الخارجية فقط
+    
+    Pagination:
+    - page: رقم الصفحة (افتراضي: 1)
+    - page_size: عدد العناصر (افتراضي: 20، الحد الأقصى: 100)
     """
+    from math import ceil
+    
     query = db.query(Booking)
     
     # Apply filters
@@ -299,9 +306,25 @@ async def get_all_bookings(
         else:
             query = query.filter(Booking.external_reservation_id.is_(None))
     
-    bookings = query.order_by(Booking.check_in_date.desc()).all()
+    # Get total count before pagination
+    total = query.count()
     
-    return [to_booking_response(b) for b in bookings]
+    # Apply pagination
+    offset = (page - 1) * page_size
+    bookings = query.order_by(Booking.check_in_date.desc()).offset(offset).limit(page_size).all()
+    
+    # Calculate pagination metadata
+    total_pages = ceil(total / page_size) if page_size > 0 else 0
+    
+    return {
+        "items": [to_booking_response(b) for b in bookings],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "has_next": page < total_pages,
+        "has_previous": page > 1
+    }
 
 
 @router.get("/monthly")
@@ -341,17 +364,50 @@ async def check_availability(
     current_user: User = Depends(get_current_user)
 ):
     """التحقق من توفر الوحدة للحجز"""
+    unit = db.query(Unit).filter(Unit.id == unit_id).first()
+    
+    if not unit:
+        return {
+            "available": False,
+            "unit_status": None,
+            "unit_status_label": "غير موجودة",
+            "suggested_price": None,
+            "message": "الوحدة غير موجودة"
+        }
+    
+    # الحجز مسموح فقط على الوحدات التي حالتها "متاحة"
+    unit_bookable = unit.status == "متاحة"
+    
+    # التحقق من تداخل الحجوزات
     has_overlap = check_booking_overlap(db, unit_id, check_in_date, check_out_date, exclude_booking_id)
     
-    unit = db.query(Unit).filter(Unit.id == unit_id).first()
+    # حساب السعر المقترح
     suggested_price = None
     if unit:
         suggested_price = calculate_booking_price(unit, check_in_date, check_out_date)
     
+    # تحديد الرسالة المناسبة
+    if not unit_bookable:
+        status_messages = {
+            "محجوزة": "الوحدة محجوزة بالكامل ولا يمكن الحجز عليها",
+            "صيانة": "الوحدة تحت الصيانة ولا يمكن حجزها",
+            "تحتاج تنظيف": "الوحدة تحتاج تنظيف ولا يمكن حجزها",
+            "مخفية": "الوحدة مخفية/مغلقة ولا يمكن حجزها",
+        }
+        message = status_messages.get(unit.status, f"حالة الوحدة ({unit.status}) لا تسمح بالحجز. يجب أن تكون 'متاحة'")
+    elif has_overlap:
+        message = "يوجد تداخل مع حجز آخر"
+    else:
+        message = "الوحدة متاحة للحجز"
+    
     return {
-        "available": not has_overlap,
+        "available": unit_bookable and not has_overlap,
+        "unit_status": unit.status,
+        "unit_status_label": unit.status,
+        "unit_bookable": unit_bookable,
+        "has_overlap": has_overlap,
         "suggested_price": suggested_price,
-        "message": "الوحدة متاحة للحجز" if not has_overlap else "يوجد تداخل مع حجز آخر"
+        "message": message
     }
 
 
@@ -375,7 +431,9 @@ async def get_booking(
 
 @router.post("")
 @router.post("/", response_model=BookingResponse)
+@limiter.limit("30/minute")
 async def create_booking(
+    request: Request,
     booking_data: BookingCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -412,6 +470,22 @@ async def create_booking(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="الوحدة غير موجودة"
+        )
+    
+    # ========== التحقق من حالة الوحدة ==========
+    # الحجز مسموح فقط على الوحدات التي حالتها "متاحة"
+    # أي حالة أخرى (محجوزة، صيانة، تنظيف، مخفية) لا تسمح بالحجز
+    if unit.status != "متاحة":
+        status_messages = {
+            "محجوزة": "الوحدة محجوزة بالكامل ولا يمكن إضافة حجز جديد",
+            "صيانة": "الوحدة تحت الصيانة ولا يمكن حجزها حالياً",
+            "تحتاج تنظيف": "الوحدة تحتاج تنظيف ولا يمكن حجزها حالياً",
+            "مخفية": "الوحدة مخفية/مغلقة ولا يمكن حجزها",
+        }
+        error_msg = status_messages.get(unit.status, f"حالة الوحدة ({unit.status}) لا تسمح بالحجز. يجب أن تكون الوحدة في حالة 'متاحة'")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_msg
         )
     
     # ========== تنظيف بيانات العميل ==========
@@ -596,9 +670,17 @@ async def create_booking(
     )
     
     # ========== مزامنة التوفر مع Channex ==========
+    # الحالة الفعلية (محجوزة) تُحسب تلقائياً بناءً على وجود الحجز
+    # هذا سيقفل الـ calendar في Channex للتواريخ المحجوزة
+    print(f"📌 BOOKING CREATED for unit '{unit.unit_name}'")
+    print(f"📤 Syncing unit availability to Channex (effective status will be computed)...")
     _sync_availability_to_channex(db, booking_data.unit_id)
     
+    # ========== تحديث حالة الوحدة تلقائياً ==========
+    _auto_update_unit_status(db, booking_data.unit_id, current_user, "booking_created")
+    
     return to_booking_response(new_booking, unit=unit, project=project, customer=customer)
+
 
 
 @router.put("/{booking_id}")
@@ -774,6 +856,8 @@ async def update_booking_status(
         audit_description = f"اكتمال حجز {booking.guest_name}"
     elif new_status == "ملغي":
         log_booking_cancelled(db, current_user.id, booking.id)
+        # تحديث حالة الوحدة تلقائياً
+        _auto_update_unit_status(db, booking.unit_id, current_user, "booking_cancelled")
         audit_activity_type = AuditActivityType.BOOKING_CANCEL
         audit_description = f"إلغاء حجز {booking.guest_name}"
     elif new_status == "مؤكد":
@@ -849,6 +933,70 @@ def _update_unit_status_on_checkout(db: Session, booking: Booking, current_user:
     )
     db.add(notification)
     db.commit()
+    
+    print(f"🧹 Unit '{unit.unit_name}' status changed: {old_status} → تحتاج تنظيف (checkout)")
+    
+    # ========== مزامنة التوفر مع Channex ==========
+    # هذا سيقفل كل الـ calendar لأن حالة الوحدة الآن "تحتاج تنظيف"
+    _sync_availability_to_channex(db, unit.id)
+
+
+def _auto_update_unit_status(db: Session, unit_id: str, current_user: User, trigger: str):
+    """
+    تحديث حالة الوحدة تلقائياً بناءً على الحجوزات
+    
+    Args:
+        trigger: سبب التحديث (booking_created, booking_cancelled, booking_deleted, booking_restored)
+    """
+    from ..services.unit_status_service import get_effective_unit_status
+    
+    unit = db.query(Unit).filter(Unit.id == unit_id).first()
+    if not unit:
+        return
+    
+    effective_status, has_bookings = get_effective_unit_status(db, unit_id)
+    old_status = unit.status
+    
+    # ===== تحويل الحالة تلقائياً =====
+    # إذا كانت الحالة اليدوية "متاحة" وهناك حجوزات → تحويل إلى "محجوزة"
+    if old_status == "متاحة" and effective_status == "محجوزة":
+        unit.status = "محجوزة"
+        db.commit()
+        print(f"🔄 AUTO-CONVERT: Unit '{unit.unit_name}' status: '{old_status}' → 'محجوزة' (trigger: {trigger})")
+        
+        # تسجيل في AuditLog
+        AuditLog.log(
+            db=db,
+            user=current_user,
+            activity_type=AuditActivityType.UPDATE,
+            entity_type=AuditEntityType.UNIT,
+            entity_id=unit.id,
+            entity_name=unit.unit_name,
+            description=f"تحويل تلقائي لحالة الوحدة من '{old_status}' إلى 'محجوزة' ({trigger})",
+            old_values={"status": old_status},
+            new_values={"status": "محجوزة", "trigger": trigger}
+        )
+    
+    # إذا كانت الحالة "محجوزة" ولا توجد حجوزات → تحويل إلى "متاحة"
+    elif old_status == "محجوزة" and effective_status == "متاحة":
+        unit.status = "متاحة"
+        db.commit()
+        print(f"🔄 AUTO-CONVERT: Unit '{unit.unit_name}' status: '{old_status}' → 'متاحة' (trigger: {trigger})")
+        
+        # تسجيل في AuditLog
+        AuditLog.log(
+            db=db,
+            user=current_user,
+            activity_type=AuditActivityType.UPDATE,
+            entity_type=AuditEntityType.UNIT,
+            entity_id=unit.id,
+            entity_name=unit.unit_name,
+            description=f"تحويل تلقائي لحالة الوحدة من '{old_status}' إلى 'متاحة' ({trigger})",
+            old_values={"status": old_status},
+            new_values={"status": "متاحة", "trigger": trigger}
+        )
+    else:
+        print(f"📋 Unit '{unit.unit_name}' status unchanged: '{old_status}' (effective: '{effective_status}', trigger: {trigger})")
 
 
 @router.delete("/{booking_id}")
@@ -896,6 +1044,8 @@ async def delete_booking(
         unit_id = booking.unit_id  # حفظ قبل الحذف
         db.delete(booking)
         db.commit()
+        # تحديث حالة الوحدة إذا لم يكن هناك حجوزات أخرى
+        _update_unit_status_after_cancellation(db, unit_id)
         # مزامنة التوفر مع Channex
         _sync_availability_to_channex(db, unit_id)
         return {"message": "تم حذف الحجز نهائياً"}
@@ -916,6 +1066,8 @@ async def delete_booking(
             entity_name=f"حجز {booking.guest_name}",
             description=f"حذف حجز: {booking.guest_name}"
         )
+        # تحديث حالة الوحدة تلقائياً
+        _auto_update_unit_status(db, unit_id, current_user, "booking_deleted")
         # مزامنة التوفر مع Channex
         _sync_availability_to_channex(db, unit_id)
         return {"message": "تم حذف الحجز بنجاح"}
@@ -954,5 +1106,11 @@ async def restore_booking(
         entity_name=f"حجز {booking.guest_name}",
         description=f"استعادة حجز: {booking.guest_name}"
     )
+    
+    # ========== تحديث حالة الوحدة تلقائياً ==========
+    _auto_update_unit_status(db, booking.unit_id, current_user, "booking_restored")
+    
+    # ========== مزامنة التوفر مع Channex ==========
+    _sync_availability_to_channex(db, booking.unit_id)
     
     return {"message": "تم استعادة الحجز بنجاح"}

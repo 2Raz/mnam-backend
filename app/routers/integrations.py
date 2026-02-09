@@ -35,9 +35,11 @@ from ..models.unmatched_webhook import UnmatchedWebhookEvent, UnmatchedEventStat
 from ..models.unit import Unit
 from ..models.project import Project
 from ..models.user import User
+from ..models.integration_alert import IntegrationAlert, AlertStatus
 from ..utils.dependencies import get_current_user
 from ..services.channex_service import ChannexIntegrationService
 from ..services.webhook_processor import AsyncWebhookReceiver, WebhookProcessor
+from ..services.webhook_receiver import WebhookReceiver
 from ..services.channex_client import ChannexClient, get_channex_client
 from ..services.outbox_worker import (
     OutboxProcessor,
@@ -279,6 +281,44 @@ async def sync_channex(
     }
 
 
+@router.post("/sync-availability/{unit_id}")
+async def sync_unit_availability(
+    unit_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    مزامنة توفر وحدة محددة مع Channex يدوياً
+    
+    يقوم بـ:
+    - حساب التوفر بناءً على حالة الوحدة
+    - حظر الأيام المحجوزة
+    - إرسال التحديث إلى Channex
+    """
+    from ..services.availability_sync_service import AvailabilitySyncService
+    
+    unit = db.query(Unit).filter(Unit.id == unit_id).first()
+    if not unit:
+        raise HTTPException(status_code=404, detail="الوحدة غير موجودة")
+    
+    service = AvailabilitySyncService(db)
+    
+    # الحصول على ملخص قبل المزامنة
+    summary = service.get_availability_summary(unit_id)
+    
+    # تنفيذ المزامنة
+    result = service.sync_unit_availability(unit_id)
+    
+    return {
+        "success": result.get("success", False),
+        "unit_name": unit.unit_name,
+        "unit_status": unit.status,
+        "summary": summary,
+        "sync_result": result,
+        "message": "تم مزامنة التوفر مع Channex" if result.get("success") else f"فشل المزامنة: {result.get('error', 'Unknown')}"
+    }
+
+
 # ==================
 # Webhook Endpoint (FAST PATH)
 # ==================
@@ -446,6 +486,370 @@ async def channex_webhook(
             action="error",
             message=str(e)
         )
+
+
+# ==================
+# NEW: Dual Webhook Endpoints (v2)
+# ==================
+
+@router.post("/webhooks/channex/bookings", response_model=WebhookResponse)
+async def channex_booking_webhook(
+    request: Request,
+    x_mnam_webhook_token: Optional[str] = Header(None, alias="X-MNAM-Webhook-Token"),
+    x_channex_signature: Optional[str] = Header(None, alias="X-Channex-Signature"),
+    db: Session = Depends(get_db)
+):
+    """
+    Receive booking webhooks from Channex (FAST PATH).
+    
+    Triggers: new, modification, cancellation
+    
+    Security:
+    - Header token validation (X-MNAM-Webhook-Token)
+    - Payload size limit (256KB)
+    - Required fields validation
+    
+    Flow: Validate -> Store -> Enqueue -> Return 200 immediately
+    """
+    if not settings.channex_enabled:
+        return WebhookResponse(
+            success=False,
+            action="disabled",
+            message="Channex integration is disabled"
+        )
+    
+    try:
+        body = await request.body()
+        content_length = len(body)
+        payload = await request.json()
+        headers = dict(request.headers)
+        
+        # Get secret from settings
+        webhook_secret = getattr(settings, 'channex_webhook_secret', None)
+        
+        receiver = WebhookReceiver(db, webhook_secret)
+        result = receiver.receive_booking(payload, headers, content_length)
+        
+        if result.already_exists:
+            return WebhookResponse(
+                success=True,
+                action="skipped",
+                message="Event already processed"
+            )
+        
+        return WebhookResponse(
+            success=True,
+            action="queued",
+            message=f"Event queued: {result.event_id}"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        return WebhookResponse(
+            success=False,
+            action="error",
+            message=str(e)
+        )
+
+
+@router.post("/webhooks/channex/health", response_model=WebhookResponse)
+async def channex_health_webhook(
+    request: Request,
+    x_mnam_webhook_token: Optional[str] = Header(None, alias="X-MNAM-Webhook-Token"),
+    db: Session = Depends(get_db)
+):
+    """
+    Receive health/error webhooks from Channex.
+    
+    Triggers: unmapped_room, unmapped_rate, sync_error, rate_error, non_acked
+    
+    Creates alerts for operations team visibility.
+    Does NOT touch calendar or bookings directly.
+    """
+    if not settings.channex_enabled:
+        return WebhookResponse(
+            success=False,
+            action="disabled",
+            message="Channex integration is disabled"
+        )
+    
+    try:
+        body = await request.body()
+        content_length = len(body)
+        payload = await request.json()
+        headers = dict(request.headers)
+        
+        webhook_secret = getattr(settings, 'channex_webhook_secret', None)
+        
+        receiver = WebhookReceiver(db, webhook_secret)
+        result = receiver.receive_health(payload, headers, content_length)
+        
+        return WebhookResponse(
+            success=True,
+            action="alert_created",
+            message=f"Alert created: {result.event_id}"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        return WebhookResponse(
+            success=False,
+            action="error",
+            message=str(e)
+        )
+
+
+@router.post("/webhooks/channex/availability", response_model=WebhookResponse)
+async def channex_availability_webhook(
+    request: Request,
+    x_mnam_webhook_token: Optional[str] = Header(None, alias="X-MNAM-Webhook-Token"),
+    db: Session = Depends(get_db)
+):
+    """
+    Receive availability/ARI webhooks from Channex.
+    
+    Triggers: ari_update, availability_update, restriction_update
+    
+    Updates the inventory_calendar based on external changes.
+    """
+    from ..services.inventory_service import InventoryService
+    from datetime import datetime
+    import json
+    import hashlib
+    
+    if not settings.channex_enabled:
+        return WebhookResponse(
+            success=False,
+            action="disabled",
+            message="Channex integration is disabled"
+        )
+    
+    try:
+        body = await request.body()
+        payload = await request.json()
+        headers = dict(request.headers)
+        
+        # Verify token if configured
+        webhook_secret = getattr(settings, 'channex_webhook_secret', None)
+        if webhook_secret:
+            token = headers.get("x-mnam-webhook-token")
+            if not token or token != webhook_secret:
+                raise HTTPException(status_code=401, detail="Invalid webhook token")
+        
+        # Extract data
+        event_type = payload.get("event") or payload.get("event_type", "ari_update")
+        property_id = payload.get("property_id")
+        data = payload.get("data", {})
+        
+        # Compute hash for dedup
+        payload_hash = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+        
+        # Check for duplicate
+        existing = db.query(WebhookEventLog).filter(
+            WebhookEventLog.provider == "channex",
+            WebhookEventLog.payload_hash == payload_hash
+        ).first()
+        
+        if existing:
+            return WebhookResponse(
+                success=True,
+                action="skipped",
+                message="Duplicate event"
+            )
+        
+        # Store event log
+        event_log = WebhookEventLog(
+            provider="channex",
+            endpoint_type="availability",
+            property_id=property_id,
+            event_type=event_type,
+            payload_json=json.dumps(payload),
+            payload_hash=payload_hash,
+            status=WebhookEventStatus.RECEIVED.value,
+            received_at=datetime.utcnow()
+        )
+        db.add(event_log)
+        
+        # Process availability updates
+        updates_applied = 0
+        inventory_service = InventoryService(db)
+        
+        # Handle different payload formats
+        changes = data.get("changes", []) or data.get("updates", []) or [data]
+        
+        for change in changes:
+            room_type_id = change.get("room_type_id")
+            date_from = change.get("date_from") or change.get("date")
+            date_to = change.get("date_to") or change.get("date")
+            
+            # Find unit by room_type_id
+            if room_type_id:
+                mapping = db.query(ExternalMapping).filter(
+                    ExternalMapping.channex_room_type_id == room_type_id
+                ).first()
+                
+                if mapping and date_from:
+                    from datetime import datetime as dt
+                    
+                    # Parse dates
+                    start_date = dt.strptime(date_from, "%Y-%m-%d").date()
+                    end_date = dt.strptime(date_to, "%Y-%m-%d").date() if date_to else start_date
+                    
+                    # Check if blocked/closed
+                    is_blocked = change.get("stop_sell", False) or change.get("closed", False)
+                    
+                    # Check if this is a full unit block (not date-specific)
+                    is_unit_level_block = change.get("unit_closed", False) or change.get("room_closed", False)
+                    
+                    if is_blocked:
+                        inventory_service.block_dates(
+                            unit_id=mapping.unit_id,
+                            start_date=start_date,
+                            end_date=end_date,
+                            reason="channex_sync"
+                        )
+                        
+                        # إذا كان الحظر على مستوى الوحدة بالكامل، نغير حالتها
+                        if is_unit_level_block:
+                            from ..models.unit import Unit
+                            unit = db.query(Unit).filter(Unit.id == mapping.unit_id).first()
+                            if unit and unit.status not in ["صيانة", "مخفية"]:
+                                unit.status = "مخفية"  # حالة مغلقة من القناة الخارجية
+                                db.add(unit)
+                                # إنشاء تنبيه للأوبريشن
+                                alert = IntegrationAlert(
+                                    alert_type="unit_closed",
+                                    severity="warning",
+                                    message=f"تم إغلاق الوحدة '{unit.unit_name}' من القناة الخارجية",
+                                    property_id=property_id,
+                                    status="open"
+                                )
+                                db.add(alert)
+                    else:
+                        # رفع الحظر - فتح التوفر
+                        inventory_service.unblock_dates(
+                            unit_id=mapping.unit_id,
+                            start_date=start_date,
+                            end_date=end_date
+                        )
+                        
+                        # إذا كان الرفع على مستوى الوحدة، نعيد تفعيلها
+                        if is_unit_level_block:
+                            from ..models.unit import Unit
+                            unit = db.query(Unit).filter(Unit.id == mapping.unit_id).first()
+                            if unit and unit.status == "مخفية":
+                                unit.status = "متاحة"
+                                db.add(unit)
+                    
+                    updates_applied += 1
+        
+        # Mark as processed
+        event_log.status = WebhookEventStatus.PROCESSED.value
+        event_log.processed_at = datetime.utcnow()
+        event_log.result_action = f"applied_{updates_applied}_updates"
+        db.commit()
+        
+        return WebhookResponse(
+            success=True,
+            action="processed",
+            message=f"Applied {updates_applied} availability updates"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).exception(f"Error processing availability webhook: {e}")
+        return WebhookResponse(
+            success=False,
+            action="error",
+            message=str(e)
+        )
+
+
+# ==================
+# Integration Alerts
+# ==================
+
+@router.get("/alerts")
+async def list_integration_alerts(
+    status: Optional[str] = Query(None, description="Filter by status: open, acknowledged, resolved"),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    List integration alerts for operations visibility.
+    """
+    query = db.query(IntegrationAlert).order_by(IntegrationAlert.created_at.desc())
+    
+    if status:
+        query = query.filter(IntegrationAlert.status == status)
+    
+    alerts = query.limit(limit).all()
+    
+    return {
+        "success": True,
+        "count": len(alerts),
+        "alerts": [
+            {
+                "id": a.id,
+                "type": a.alert_type,
+                "severity": a.severity,
+                "message": a.message,
+                "property_id": a.property_id,
+                "status": a.status,
+                "created_at": a.created_at.isoformat() if a.created_at else None
+            }
+            for a in alerts
+        ]
+    }
+
+
+@router.post("/alerts/{alert_id}/acknowledge")
+async def acknowledge_alert(
+    alert_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Acknowledge an integration alert."""
+    from datetime import datetime
+    
+    alert = db.query(IntegrationAlert).filter(IntegrationAlert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    
+    alert.status = AlertStatus.ACKNOWLEDGED.value
+    alert.acknowledged_at = datetime.utcnow()
+    alert.acknowledged_by_id = current_user.id
+    db.commit()
+    
+    return {"success": True, "message": "Alert acknowledged"}
+
+
+@router.post("/alerts/{alert_id}/resolve")
+async def resolve_alert(
+    alert_id: str,
+    notes: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Resolve an integration alert."""
+    from datetime import datetime
+    
+    alert = db.query(IntegrationAlert).filter(IntegrationAlert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    
+    alert.status = AlertStatus.RESOLVED.value
+    alert.resolved_at = datetime.utcnow()
+    alert.resolved_by_id = current_user.id
+    alert.resolution_notes = notes
+    db.commit()
+    
+    return {"success": True, "message": "Alert resolved"}
 
 
 @router.post("/channex/webhook/process")

@@ -82,6 +82,17 @@ class Settings(BaseSettings):
     worker_poll_interval: int = Field(default=10, alias="WORKER_POLL_INTERVAL")  # seconds
     worker_batch_size: int = Field(default=50, alias="WORKER_BATCH_SIZE")
     
+    # ==============================================
+    # Redis Settings (for Rate Limiting in Production)
+    # ==============================================
+    redis_url: str = Field(default="", alias="REDIS_URL")  # e.g., redis://localhost:6379
+    
+    # ==============================================
+    # Logging Settings
+    # ==============================================
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    log_json_format: bool = Field(default=True, alias="LOG_JSON_FORMAT")  # JSON for production
+    
     @property
     def channex_allowed_ip_list(self) -> List[str]:
         """Parse allowed IPs for webhook validation"""

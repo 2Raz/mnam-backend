@@ -32,7 +32,7 @@ from .channel_integration import (
     AuditDirection,
     AuditEntityType
 )
-from .webhook_event import WebhookEventLog, WebhookEventStatus
+from .webhook_event import WebhookEventLog, WebhookEventStatus, ErrorCode
 from .rate_state import PropertyRateState
 from .unmatched_webhook import UnmatchedWebhookEvent, UnmatchedEventStatus, UnmatchedEventReason
 from .task import EmployeeTask, TaskStatus
@@ -44,6 +44,9 @@ from .audit_log import (
     ACTIVITY_LABELS as AUDIT_ACTIVITY_LABELS,
     ENTITY_LABELS as AUDIT_ENTITY_LABELS
 )
+from .booking_revision import BookingRevision
+from .inventory_calendar import InventoryCalendar
+from .integration_alert import IntegrationAlert, AlertType, AlertSeverity, AlertStatus
 
 __all__ = [
     "User", "Owner", "Project", "Unit", "Booking", "Transaction", "Customer",
@@ -55,12 +58,16 @@ __all__ = [
     "ChannelConnection", "ExternalMapping", "IntegrationOutbox", "IntegrationLog",
     "InboundIdempotency", "IntegrationAudit", "ConnectionStatus", "OutboxStatus", "OutboxEventType",
     "AuditDirection", "AuditEntityType",
-    "WebhookEventLog", "WebhookEventStatus",
+    "WebhookEventLog", "WebhookEventStatus", "ErrorCode",
     "PropertyRateState",
     "UnmatchedWebhookEvent", "UnmatchedEventStatus", "UnmatchedEventReason",
     "EmployeeTask", "TaskStatus",
     "EmployeeSession", "EmployeeAttendance", "OFFLINE_TIMEOUT_MINUTES",
-    "AuditLog", "AuditActivityType", "AUDIT_ACTIVITY_LABELS", "AUDIT_ENTITY_LABELS"
+    "AuditLog", "AuditActivityType", "AUDIT_ACTIVITY_LABELS", "AUDIT_ENTITY_LABELS",
+    # New models
+    "BookingRevision",
+    "InventoryCalendar",
+    "IntegrationAlert", "AlertType", "AlertSeverity", "AlertStatus",
 ]
 
 

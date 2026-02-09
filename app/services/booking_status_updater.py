@@ -82,8 +82,23 @@ class BookingStatusUpdater:
                 if hasattr(unit, 'status'):
                     unit.status = "تحتاج تنظيف"
                     logger.info(f"Unit {unit_id} marked as needs cleaning")
+                    # 🆕 مزامنة Channex
+                    self._sync_unit_to_channex(unit_id)
         except Exception as e:
             logger.warning(f"Could not update unit status: {e}")
+    
+    def _sync_unit_to_channex(self, unit_id: str):
+        """مزامنة التوفر مع Channex بعد تغير حالة الوحدة تلقائياً"""
+        try:
+            from .availability_sync_service import sync_unit_to_channex
+            result = sync_unit_to_channex(self.db, unit_id)
+            if result.get("success"):
+                logger.info(f"✅ Synced unit {unit_id} to Channex after auto-update")
+            else:
+                logger.warning(f"⚠️ Failed to sync unit {unit_id}: {result.get('error')}")
+        except Exception as e:
+            logger.warning(f"Could not sync unit to Channex: {e}")
+    
     
     def get_overdue_confirmed_bookings(self) -> List[Booking]:
         """

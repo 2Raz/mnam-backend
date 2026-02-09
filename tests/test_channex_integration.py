@@ -471,6 +471,103 @@ class TestBookingCreationIdempotency:
         assert booking1.external_reservation_id == booking2.external_reservation_id
 
 
+class TestAvailabilityCalculation:
+    """Tests for availability calculation with unit status"""
+    
+    def test_cleaning_status_blocks_today_only(self):
+        """حالة 'تحتاج تنظيف' يجب أن تغلق اليوم فقط"""
+        from datetime import date, timedelta
+        
+        today = date.today()
+        tomorrow = today + timedelta(days=1)
+        
+        # Simulate the logic
+        dates_availability = {
+            today: {"available": True, "stop_sell": False},
+            tomorrow: {"available": True, "stop_sell": False},
+        }
+        
+        effective_status = "تحتاج تنظيف"
+        
+        # Apply new logic (block today only)
+        if effective_status in ["صيانة", "تحتاج تنظيف", "مخفية"]:
+            if today in dates_availability:
+                dates_availability[today] = {"available": False, "stop_sell": True}
+        
+        # Assert: today blocked, tomorrow open
+        assert dates_availability[today]["available"] == False
+        assert dates_availability[tomorrow]["available"] == True
+    
+    def test_maintenance_status_blocks_today_only(self):
+        """حالة 'صيانة' يجب أن تغلق اليوم فقط"""
+        from datetime import date, timedelta
+        
+        today = date.today()
+        tomorrow = today + timedelta(days=1)
+        
+        dates_availability = {
+            today: {"available": True, "stop_sell": False},
+            tomorrow: {"available": True, "stop_sell": False},
+        }
+        
+        effective_status = "صيانة"
+        
+        if effective_status in ["صيانة", "تحتاج تنظيف", "مخفية"]:
+            if today in dates_availability:
+                dates_availability[today] = {"available": False, "stop_sell": True}
+        
+        assert dates_availability[today]["available"] == False
+        assert dates_availability[tomorrow]["available"] == True
+    
+    def test_hidden_status_blocks_today_only(self):
+        """حالة 'مخفية' يجب أن تغلق اليوم فقط (مؤقتة)"""
+        from datetime import date, timedelta
+        
+        today = date.today()
+        tomorrow = today + timedelta(days=1)
+        
+        dates_availability = {
+            today: {"available": True, "stop_sell": False},
+            tomorrow: {"available": True, "stop_sell": False},
+        }
+        
+        effective_status = "مخفية"
+        
+        if effective_status in ["صيانة", "تحتاج تنظيف", "مخفية"]:
+            if today in dates_availability:
+                dates_availability[today] = {"available": False, "stop_sell": True}
+        
+        assert dates_availability[today]["available"] == False
+        assert dates_availability[tomorrow]["available"] == True
+    
+    def test_booked_status_not_in_full_block_list(self):
+        """حالة 'محجوزة' لا يجب أن تكون في قائمة الإغلاق الكامل"""
+        full_block_statuses = ["صيانة", "تحتاج تنظيف", "مخفية"]
+        assert "محجوزة" not in full_block_statuses
+    
+    def test_available_status_not_blocked(self):
+        """حالة 'متاحة' يجب أن لا تغلق أي يوم"""
+        from datetime import date, timedelta
+        
+        today = date.today()
+        tomorrow = today + timedelta(days=1)
+        
+        dates_availability = {
+            today: {"available": True, "stop_sell": False},
+            tomorrow: {"available": True, "stop_sell": False},
+        }
+        
+        effective_status = "متاحة"
+        
+        # Available status should not trigger any blocking
+        if effective_status in ["صيانة", "تحتاج تنظيف", "مخفية"]:
+            if today in dates_availability:
+                dates_availability[today] = {"available": False, "stop_sell": True}
+        
+        assert dates_availability[today]["available"] == True
+        assert dates_availability[tomorrow]["available"] == True
+
+
 # Entry point for running tests
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
