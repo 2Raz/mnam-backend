@@ -43,6 +43,15 @@ class Unit(Base):
     amenities = Column(JSON, default=list)
     description = Column(Text, nullable=True)
     permit_no = Column(String(50), nullable=True)
+    map_url = Column(String(500), nullable=True)  # الوحدة قد يكون لها موقع خاص
+    
+    # تفاصيل إضافية
+    bathrooms = Column(Integer, default=1)
+    max_guests = Column(Integer, default=2)
+    min_stay = Column(Integer, default=1)
+    max_stay = Column(Integer, default=30)
+    check_in_time = Column(String(10), default="15:00")
+    check_out_time = Column(String(10), default="11:00")
     
     # معلومات الدخول للوحدة
     access_info = Column(Text, nullable=True)

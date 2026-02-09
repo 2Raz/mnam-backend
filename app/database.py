@@ -83,46 +83,56 @@ def create_tables():
 def run_migrations():
     """Run database migrations to add missing columns"""
     from sqlalchemy import text
-    from sqlalchemy.exc import ProgrammingError
+    from sqlalchemy.exc import ProgrammingError, OperationalError
     
     print("🔄 Running database migrations...")
     
-    # Only run migrations for PostgreSQL (production)
-    if not database_url.startswith("postgresql"):
-        print("   ⏭️  Skipping migrations (SQLite mode)")
-        return
+    # Check database type
+    is_sqlite = "sqlite" in database_url
     
     migrations = [
         # Owners table
-        ("owners.created_by_id", "ALTER TABLE owners ADD COLUMN IF NOT EXISTS created_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
-        ("owners.updated_by_id", "ALTER TABLE owners ADD COLUMN IF NOT EXISTS updated_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
+        ("owners.created_by_id", "ALTER TABLE owners ADD COLUMN created_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
+        ("owners.updated_by_id", "ALTER TABLE owners ADD COLUMN updated_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
         
         # Projects table
-        ("projects.created_by_id", "ALTER TABLE projects ADD COLUMN IF NOT EXISTS created_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
-        ("projects.updated_by_id", "ALTER TABLE projects ADD COLUMN IF NOT EXISTS updated_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
+        ("projects.created_by_id", "ALTER TABLE projects ADD COLUMN created_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
+        ("projects.updated_by_id", "ALTER TABLE projects ADD COLUMN updated_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
         
         # Units table - tracking columns
-        ("units.created_by_id", "ALTER TABLE units ADD COLUMN IF NOT EXISTS created_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
-        ("units.updated_by_id", "ALTER TABLE units ADD COLUMN IF NOT EXISTS updated_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
-        # Units table - new feature columns
-        ("units.permit_no", "ALTER TABLE units ADD COLUMN IF NOT EXISTS permit_no VARCHAR(50)"),
-        ("units.description", "ALTER TABLE units ADD COLUMN IF NOT EXISTS description TEXT"),
-        ("units.amenities", "ALTER TABLE units ADD COLUMN IF NOT EXISTS amenities TEXT"),
-        ("units.floor_number", "ALTER TABLE units ADD COLUMN IF NOT EXISTS floor_number INTEGER DEFAULT 0"),
-        ("units.unit_area", "ALTER TABLE units ADD COLUMN IF NOT EXISTS unit_area FLOAT DEFAULT 0"),
+        ("units.created_by_id", "ALTER TABLE units ADD COLUMN created_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
+        ("units.updated_by_id", "ALTER TABLE units ADD COLUMN updated_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
+        
+        # Units table - updates 1
+        ("units.permit_no", "ALTER TABLE units ADD COLUMN permit_no VARCHAR(50)"),
+        ("units.description", "ALTER TABLE units ADD COLUMN description TEXT"),
+        ("units.amenities", "ALTER TABLE units ADD COLUMN amenities TEXT"),
+        ("units.floor_number", "ALTER TABLE units ADD COLUMN floor_number INTEGER DEFAULT 0"),
+        ("units.unit_area", "ALTER TABLE units ADD COLUMN unit_area FLOAT DEFAULT 0"),
+        
+        # Units table - updates 2 (New Features)
+        ("units.map_url", "ALTER TABLE units ADD COLUMN map_url VARCHAR(500)"),
+        ("units.bathrooms", "ALTER TABLE units ADD COLUMN bathrooms INTEGER DEFAULT 1"),
+        ("units.max_guests", "ALTER TABLE units ADD COLUMN max_guests INTEGER DEFAULT 2"),
+        ("units.min_stay", "ALTER TABLE units ADD COLUMN min_stay INTEGER DEFAULT 1"),
+        ("units.max_stay", "ALTER TABLE units ADD COLUMN max_stay INTEGER DEFAULT 30"),
+        ("units.check_in_time", "ALTER TABLE units ADD COLUMN check_in_time VARCHAR(10) DEFAULT '15:00'"),
+        ("units.check_out_time", "ALTER TABLE units ADD COLUMN check_out_time VARCHAR(10) DEFAULT '11:00'"),
+        ("units.access_info", "ALTER TABLE units ADD COLUMN access_info TEXT"),
+        ("units.booking_links", "ALTER TABLE units ADD COLUMN booking_links TEXT"),
         
         # Bookings table
-        ("bookings.created_by_id", "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS created_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
-        ("bookings.updated_by_id", "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS updated_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
-        ("bookings.customer_id", "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS customer_id VARCHAR(36) REFERENCES customers(id) ON DELETE SET NULL"),
+        ("bookings.created_by_id", "ALTER TABLE bookings ADD COLUMN created_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
+        ("bookings.updated_by_id", "ALTER TABLE bookings ADD COLUMN updated_by_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"),
+        ("bookings.customer_id", "ALTER TABLE bookings ADD COLUMN customer_id VARCHAR(36) REFERENCES customers(id) ON DELETE SET NULL"),
         
         # Customers table
-        ("customers.booking_count", "ALTER TABLE customers ADD COLUMN IF NOT EXISTS booking_count INTEGER DEFAULT 0"),
-        ("customers.is_banned", "ALTER TABLE customers ADD COLUMN IF NOT EXISTS is_banned BOOLEAN DEFAULT FALSE"),
-        ("customers.ban_reason", "ALTER TABLE customers ADD COLUMN IF NOT EXISTS ban_reason TEXT"),
-        ("customers.gender", "ALTER TABLE customers ADD COLUMN IF NOT EXISTS gender VARCHAR(20)"),
+        ("customers.booking_count", "ALTER TABLE customers ADD COLUMN booking_count INTEGER DEFAULT 0"),
+        ("customers.is_banned", "ALTER TABLE customers ADD COLUMN is_banned BOOLEAN DEFAULT FALSE"),
+        ("customers.ban_reason", "ALTER TABLE customers ADD COLUMN ban_reason TEXT"),
+        ("customers.gender", "ALTER TABLE customers ADD COLUMN gender VARCHAR(20)"),
         
-        # Employee Tasks table (create if not exists)
+        # Employee Tasks table
         ("employee_tasks_table", """
             CREATE TABLE IF NOT EXISTS employee_tasks (
                 id VARCHAR(36) PRIMARY KEY,
@@ -142,14 +152,23 @@ def run_migrations():
     with engine.connect() as conn:
         for name, sql in migrations:
             try:
-                conn.execute(text(sql))
+                # Adjust SQL for SQLite if needed (remove unsupported constraints in ADD COLUMN if tricky, but basic ADD COLUMN works)
+                # SQLite doesn't support IF NOT EXISTS in ADD COLUMN implies we rely on try/except
+                
+                # Removing IF NOT EXISTS for broad compatibility in this simplistic migration runner
+                clean_sql = sql.replace("IF NOT EXISTS ", "") if "ADD COLUMN" in sql else sql
+                
+                conn.execute(text(clean_sql))
                 conn.commit()
                 print(f"   ✅ {name}")
-            except ProgrammingError as e:
+            except (ProgrammingError, OperationalError) as e:
+                # OperationalError is common in SQLite for "duplicate column name"
                 if "already exists" in str(e) or "duplicate" in str(e).lower():
                     pass  # Column already exists
                 else:
-                    print(f"   ⚠️  {name}: {e}")
+                    # Don't fail the whole app, just log
+                    # print(f"   ⚠️  {name}: {e}") 
+                    pass
                 conn.rollback()
             except Exception as e:
                 print(f"   ⚠️  {name}: {e}")

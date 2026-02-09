@@ -47,6 +47,14 @@ class UnitBase(BaseModel):
     amenities: List[str] = []
     description: Optional[str] = None
     permit_no: Optional[str] = None
+    map_url: Optional[str] = None
+    # تفاصيل إضافية
+    bathrooms: int = 1
+    max_guests: int = 2
+    min_stay: int = 1
+    max_stay: int = 30
+    check_in_time: str = "15:00"
+    check_out_time: str = "11:00"
     # معلومات الدخول للوحدة
     access_info: Optional[str] = None
     # روابط الحجز: [{"platform": "Airbnb", "url": "https://..."}]
@@ -92,6 +100,13 @@ class UnitUpdate(BaseModel):
     amenities: Optional[List[str]] = None
     description: Optional[str] = None
     permit_no: Optional[str] = None
+    map_url: Optional[str] = None
+    bathrooms: Optional[int] = None
+    max_guests: Optional[int] = None
+    min_stay: Optional[int] = None
+    max_stay: Optional[int] = None
+    check_in_time: Optional[str] = None
+    check_out_time: Optional[str] = None
     # معلومات الدخول للوحدة
     access_info: Optional[str] = None
     # روابط الحجز
@@ -110,6 +125,7 @@ class UnitResponse(UnitBase):
     project_name: str = ""
     owner_name: str = ""
     city: Optional[str] = None
+    project_map_url: Optional[str] = None  # Legacy support
     created_at: datetime
     updated_at: datetime
     

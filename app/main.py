@@ -205,17 +205,7 @@ app = FastAPI(
 app.state.limiter = limiter
 
 
-# ================================
-# CORS MIDDLEWARE - MUST BE FIRST!
-# ================================
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origins,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-    expose_headers=["X-Request-ID"],
-)
+
 
 
 # Security Headers Middleware
@@ -271,6 +261,19 @@ class MetricsMiddleware(BaseHTTPMiddleware):
 app.add_middleware(MetricsMiddleware)
 app.add_middleware(RequestIdMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
+
+
+# ================================
+# CORS MIDDLEWARE - MUST BE OUTERMOST (ADDED LAST)
+# ================================
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+    expose_headers=["X-Request-ID"],
+)
 
 
 # Rate limit handler
