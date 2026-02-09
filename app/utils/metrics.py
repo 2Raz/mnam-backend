@@ -215,7 +215,8 @@ def format_prometheus_metrics() -> str:
     add_metric("http_requests_total", 0, help_text=http_requests_total.description, metric_type="counter")
     for key, value in http_requests_total.get_all().items():
         labels = dict(zip(http_requests_total.labels, key))
-        lines.append(f'http_requests_total{{{",".join(f"{k}=\"{v}\"" for k,v in labels.items())}}} {value}')
+        label_str = ",".join(f'{k}="{v}"' for k, v in labels.items())
+        lines.append(f'http_requests_total{{{label_str}}} {value}')
     
     # HTTP Duration Histogram
     hist_data = http_request_duration_seconds.get_all()
@@ -230,31 +231,36 @@ def format_prometheus_metrics() -> str:
     add_metric("bookings_total", 0, help_text=bookings_total.description, metric_type="counter")
     for key, value in bookings_total.get_all().items():
         labels = dict(zip(bookings_total.labels, key))
-        lines.append(f'bookings_total{{{",".join(f"{k}=\"{v}\"" for k,v in labels.items())}}} {value}')
+        label_str = ",".join(f'{k}="{v}"' for k, v in labels.items())
+        lines.append(f'bookings_total{{{label_str}}} {value}')
     
     # Bookings by Status Gauge
     add_metric("bookings_by_status", 0, help_text=bookings_by_status.description, metric_type="gauge")
     for key, value in bookings_by_status.get_all().items():
         labels = dict(zip(bookings_by_status.labels, key))
-        lines.append(f'bookings_by_status{{{",".join(f"{k}=\"{v}\"" for k,v in labels.items())}}} {value}')
+        label_str = ",".join(f'{k}="{v}"' for k, v in labels.items())
+        lines.append(f'bookings_by_status{{{label_str}}} {value}')
     
     # Revenue Counter
     add_metric("revenue_total", 0, help_text=revenue_total.description, metric_type="counter")
     for key, value in revenue_total.get_all().items():
         labels = dict(zip(revenue_total.labels, key))
-        lines.append(f'revenue_total{{{",".join(f"{k}=\"{v}\"" for k,v in labels.items())}}} {value}')
+        label_str = ",".join(f'{k}="{v}"' for k, v in labels.items())
+        lines.append(f'revenue_total{{{label_str}}} {value}')
     
     # Channex Sync Counter
     add_metric("channex_sync_total", 0, help_text=channex_sync_total.description, metric_type="counter")
     for key, value in channex_sync_total.get_all().items():
         labels = dict(zip(channex_sync_total.labels, key))
-        lines.append(f'channex_sync_total{{{",".join(f"{k}=\"{v}\"" for k,v in labels.items())}}} {value}')
+        label_str = ",".join(f'{k}="{v}"' for k, v in labels.items())
+        lines.append(f'channex_sync_total{{{label_str}}} {value}')
     
     # Webhook Events Counter
     add_metric("webhook_events_total", 0, help_text=webhook_events_total.description, metric_type="counter")
     for key, value in webhook_events_total.get_all().items():
         labels = dict(zip(webhook_events_total.labels, key))
-        lines.append(f'webhook_events_total{{{",".join(f"{k}=\"{v}\"" for k,v in labels.items())}}} {value}')
+        label_str = ",".join(f'{k}="{v}"' for k, v in labels.items())
+        lines.append(f'webhook_events_total{{{label_str}}} {value}')
     
     # System Gauges
     add_metric("active_connections", 0, help_text=active_connections.description, metric_type="gauge")
